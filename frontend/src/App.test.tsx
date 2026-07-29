@@ -70,6 +70,11 @@ describe("App", () => {
           attempt: 1,
           status: "won",
           answer: "crane",
+          deception: {
+            outcome: "notActivated",
+            scheduledAttempt: 4,
+            reason: "notReached",
+          },
         }),
       );
 
@@ -100,6 +105,34 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close result" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "View result" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View result" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      screen.getByText("The lie was waiting on row 4. You finished before it."),
+    ).toBeInTheDocument();
+  });
+
+  it("opens How Deception Works from the mode screen", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(bootstrap));
+    render(<App />);
+
+    const help = await screen.findByRole("button", {
+      name: "How Deception Works",
+    });
+    help.focus();
+    fireEvent.click(help);
+
+    expect(
+      screen.getByRole("heading", { name: "How Deception Works" }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(help).toHaveFocus();
   });
 
   it("keeps a short guess local and does not call the guess API", async () => {

@@ -3,12 +3,29 @@ import type { GameMode } from "../api/types";
 type BrandHeaderProps = {
   mode?: GameMode;
   onReturn?: () => void;
+  onHelp: () => void;
 };
 
-export function BrandHeader({ mode, onReturn }: BrandHeaderProps) {
+function HelpButton({ onHelp }: { onHelp: () => void }) {
+  return (
+    <button
+      className="help-button"
+      type="button"
+      aria-label="How Deception Works"
+      onClick={onHelp}
+    >
+      <span aria-hidden="true">?</span>
+    </button>
+  );
+}
+
+export function BrandHeader({ mode, onReturn, onHelp }: BrandHeaderProps) {
   if (!mode) {
     return (
       <header className="brand-header brand-header--select">
+        <div className="select-utility">
+          <HelpButton onHelp={onHelp} />
+        </div>
         <h1 className="brand-title">DECEPTION</h1>
         <div className="brand-rule" aria-hidden="true" />
         <p className="brand-tagline">Choose your words carefully.</p>
@@ -27,9 +44,12 @@ export function BrandHeader({ mode, onReturn }: BrandHeaderProps) {
       <div className="game-brand">
         <h1 className="brand-title">DECEPTION</h1>
       </div>
-      <p className={`mode-name mode-name--${mode}`}>
-        {mode === "daily" ? "Daily" : "Practice"}
-      </p>
+      <div className="game-header-actions">
+        <p className={`mode-name mode-name--${mode}`}>
+          {mode === "daily" ? "Daily" : "Practice"}
+        </p>
+        <HelpButton onHelp={onHelp} />
+      </div>
     </header>
   );
 }

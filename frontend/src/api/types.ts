@@ -25,12 +25,30 @@ export type StartGameResponse = {
   puzzleKey?: string;
 };
 
+export type DeceptionReveal =
+  | {
+      outcome: "activated";
+      scheduledAttempt: number;
+      change: {
+        tileIndex: number;
+        letter: string;
+        truthfulFeedback: FeedbackMarker;
+        displayedFeedback: FeedbackMarker;
+      };
+    }
+  | {
+      outcome: "notActivated";
+      scheduledAttempt: number;
+      reason: "notReached" | "winningGuess" | "finalAttempt" | "noEligibleLie";
+    };
+
 export type GuessResponse = {
   guess: string;
   feedback: string;
   attempt: number;
   status: GameStatus;
   answer?: string;
+  deception?: DeceptionReveal;
 };
 
 export type ErrorResponse = {

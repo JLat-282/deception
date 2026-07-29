@@ -128,6 +128,40 @@ button:disabled {
   text-align: center;
 }
 
+.select-utility {
+  position: absolute;
+  top: 1.1rem;
+  right: 0;
+}
+
+.help-button {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgb(18 16 22 / 88%);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+  cursor: pointer;
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.help-button:hover {
+  border-color: var(--crimson);
+  background: var(--surface-raised);
+  transform: translateY(-1px);
+}
+
 .brand-title {
   margin: 0;
   font-family: "Cormorant Garamond", serif;
@@ -331,10 +365,20 @@ button:disabled {
 }
 
 .mode-name {
-  justify-self: end;
   margin: 0.3rem 0 0;
   font-size: 1.35rem;
   font-weight: 600;
+}
+
+.game-header-actions {
+  display: flex;
+  justify-self: end;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.game-header-actions .help-button {
+  flex: 0 0 auto;
 }
 
 .mode-name--daily {
@@ -583,7 +627,7 @@ button:disabled {
   background: var(--absent);
 }
 
-.result-overlay {
+.dialog-overlay {
   position: fixed;
   z-index: 50;
   inset: 0;
@@ -592,10 +636,10 @@ button:disabled {
   place-items: center;
   background: rgb(0 0 0 / 72%);
   backdrop-filter: blur(3px);
-  animation: result-backdrop-in 180ms ease-out;
+  animation: dialog-backdrop-in 180ms ease-out;
 }
 
-.result-panel {
+.dialog-panel {
   position: relative;
   width: min(480px, 100%);
   max-height: calc(100vh - 2rem);
@@ -605,11 +649,10 @@ button:disabled {
   border-radius: var(--radius-md);
   background: rgb(15 12 17 / 98%);
   box-shadow: var(--shadow-panel);
-  text-align: center;
-  animation: result-panel-in 200ms ease-out;
+  animation: dialog-panel-in 200ms ease-out;
 }
 
-.result-close {
+.dialog-close {
   position: absolute;
   top: 0.65rem;
   right: 0.65rem;
@@ -625,13 +668,13 @@ button:disabled {
   cursor: pointer;
 }
 
-.result-close:hover {
+.dialog-close:hover {
   color: var(--text);
   border-color: var(--border);
   background: var(--surface-raised);
 }
 
-.result-close svg {
+.dialog-close svg {
   width: 20px;
   height: 20px;
   fill: none;
@@ -640,16 +683,86 @@ button:disabled {
   stroke-width: 1.8;
 }
 
-.result-panel h2 {
+.dialog-panel > h2 {
   margin: 0;
   padding-inline: 2rem;
   font-family: "Cormorant Garamond", serif;
   font-size: clamp(2.2rem, 7vw, 3rem);
+  text-align: center;
 }
 
 .result-panel p {
   color: var(--text-muted);
   line-height: 1.55;
+}
+
+.result-summary {
+  text-align: center;
+}
+
+.deception-result {
+  margin-top: 1.2rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgb(148 95 192 / 55%);
+  border-radius: var(--radius-sm);
+  background: rgb(100 49 131 / 12%);
+}
+
+.deception-result h3 {
+  margin: 0;
+  color: var(--violet);
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.45rem;
+}
+
+.deception-result p {
+  margin-bottom: 0;
+}
+
+.help-dialog {
+  width: min(560px, 100%);
+  border-color: var(--violet);
+}
+
+.help-sections {
+  display: grid;
+  margin-top: 1.25rem;
+  gap: 1rem;
+}
+
+.help-sections section {
+  padding-left: 1rem;
+  border-left: 2px solid rgb(210 45 72 / 72%);
+}
+
+.help-sections h3 {
+  margin: 0;
+  color: var(--text);
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.35rem;
+}
+
+.help-sections p {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.view-result-button {
+  min-height: 44px;
+  margin-top: 1rem;
+  padding: 0.55rem 1rem;
+  color: var(--text);
+  border: 1px solid var(--violet);
+  border-radius: var(--radius-sm);
+  background: rgb(100 49 131 / 24%);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.view-result-button:hover {
+  background: rgb(100 49 131 / 46%);
 }
 
 .answer-reveal strong {
@@ -666,13 +779,13 @@ button:disabled {
   gap: 1.2rem;
 }
 
-@keyframes result-backdrop-in {
+@keyframes dialog-backdrop-in {
   from {
     opacity: 0;
   }
 }
 
-@keyframes result-panel-in {
+@keyframes dialog-panel-in {
   from {
     opacity: 0;
     transform: translateY(12px) scale(0.98);
@@ -734,7 +847,7 @@ button:disabled {
     margin-top: 0.7rem;
   }
 
-  .mode-name {
+  .game-header-actions {
     grid-column: 2;
     grid-row: 2;
     margin-top: 0.7rem;
@@ -770,6 +883,14 @@ button:disabled {
 }
 
 @media (max-width: 390px) {
+  .brand-header--select {
+    padding-top: 5rem;
+  }
+
+  .select-utility {
+    top: 0.75rem;
+  }
+
   .mode-screen::before,
   .mode-screen::after,
   .game-screen::before,
@@ -782,8 +903,29 @@ button:disabled {
     font-size: 0.82rem;
   }
 
+  .game-header-actions {
+    gap: 0.45rem;
+  }
+
   .mode-name {
     font-size: 1rem;
+  }
+
+  .game-header-actions .help-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .dialog-overlay {
+    padding: max(0.75rem, env(safe-area-inset-top))
+      max(0.75rem, env(safe-area-inset-right))
+      max(0.75rem, env(safe-area-inset-bottom))
+      max(0.75rem, env(safe-area-inset-left));
+  }
+
+  .dialog-panel {
+    max-height: calc(100dvh - 1.5rem);
+    padding-inline: 1.1rem;
   }
 
   .game-stage {

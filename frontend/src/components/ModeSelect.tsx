@@ -6,14 +6,21 @@ type ModeSelectProps = {
   busy: boolean;
   message?: string;
   onStart: (mode: GameMode) => void;
+  onHelp: () => void;
 };
 
-export function ModeSelect({ daily, busy, message, onStart }: ModeSelectProps) {
+export function ModeSelect({
+  daily,
+  busy,
+  message,
+  onStart,
+  onHelp,
+}: ModeSelectProps) {
   const dailyUsed = daily.availability === "used";
 
   return (
     <main className="mode-screen">
-      <BrandHeader />
+      <BrandHeader onHelp={onHelp} />
 
       {message ? (
         <p className="mode-message" role="status" aria-live="polite">

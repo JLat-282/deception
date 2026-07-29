@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { ApiError, api } from "./api/client";
 import type { GameMode } from "./api/types";
 import { BrandHeader } from "./components/BrandHeader";
 import { FeedbackLegend } from "./components/FeedbackLegend";
 import { GameBoard } from "./components/GameBoard";
 import { GameResult } from "./components/GameResult";
+import { HowDeceptionWorks } from "./components/HowDeceptionWorks";
 import { Keyboard } from "./components/Keyboard";
 import { ModeSelect } from "./components/ModeSelect";
 import { buildKeyboardFeedback } from "./game/keyboardState";
@@ -26,6 +27,14 @@ function isRecoverableServiceError(error: unknown): boolean {
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [resultOpen, setResultOpen] = useState(false);
+
+  const closeHelp = useCallback(() => setHelpOpen(false), []);
+  const closeResult = useCallback(() => setResultOpen(false), []);
+  const openHelp = useCallback(() => {
+    if (!resultOpen) setHelpOpen(true);
+  }, [resultOpen]);
 
   const loadBootstrap = useCallback(async () => {
     dispatch({ type: "BOOTSTRAP_LOADING" });
@@ -47,6 +56,8 @@ export default function App() {
   }, [loadBootstrap]);
 
   const startGame = useCallback(async (mode: GameMode) => {
+    setHelpOpen(false);
+    setResultOpen(false);
     dispatch({ type: "STARTING", mode });
     try {
       const session = await api.startGame(mode);
@@ -100,6 +111,13 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [state.phase]);
 
+  useEffect(() => {
+    if (state.phase === "won" || state.phase === "lost") {
+      setHelpOpen(false);
+      setResultOpen(true);
+    }
+  }, [state.phase]);
+
   const onLetter = useCallback((letter: string) => {
     dispatch({ type: "TYPE_LETTER", letter });
   }, []);
@@ -110,6 +128,7 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (helpOpen || resultOpen) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (
         event.target instanceof HTMLElement &&
@@ -129,7 +148,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onBackspace, onLetter, submitGuess]);
+  }, [helpOpen, onBackspace, onLetter, resultOpen, submitGuess]);
 
   const keyboardFeedback = useMemo(
     () => buildKeyboardFeedback(state.guesses),
@@ -171,12 +190,16 @@ export default function App() {
     state.bootstrap
   ) {
     return (
-      <ModeSelect
-        daily={state.bootstrap.daily}
-        busy={state.phase === "starting"}
-        message={state.phase === "error" ? state.message : undefined}
-        onStart={(mode) => void startGame(mode)}
-      />
+      <>
+        <ModeSelect
+          daily={state.bootstrap.daily}
+          busy={state.phase === "starting"}
+          message={state.phase === "error" ? state.message : undefined}
+          onStart={(mode) => void startGame(mode)}
+          onHelp={openHelp}
+        />
+        {helpOpen ? <HowDeceptionWorks onClose={closeHelp} /> : null}
+      </>
     );
   }
 
@@ -194,7 +217,12 @@ export default function App() {
     <main className="game-screen">
       <BrandHeader
         mode={state.session.mode}
-        onReturn={() => void loadBootstrap()}
+        onReturn={() => {
+          setHelpOpen(false);
+          setResultOpen(false);
+          void loadBootstrap();
+        }}
+        onHelp={openHelp}
       />
       <div className="game-stage">
         <GameBoard
@@ -250,15 +278,33 @@ export default function App() {
         />
         <FeedbackLegend />
 
-        {finished && latest?.answer ? (
+        {finished && !resultOpen ? (
+          <button
+            className="view-result-button"
+            type="button"
+            onClick={() => setResultOpen(true)}
+          >
+            View result
+          </button>
+        ) : null}
+
+        {finished && resultOpen && latest?.answer ? (
           <GameResult
             mode={state.session.mode}
             status={latest.status === "won" ? "won" : "lost"}
             answer={latest.answer}
             attempt={latest.attempt}
+            deception={latest.deception}
+            onClose={closeResult}
             onPractice={() => void startGame("practice")}
-            onModes={() => void loadBootstrap()}
+            onModes={() => {
+              setResultOpen(false);
+              void loadBootstrap();
+            }}
           />
+        ) : null}
+        {helpOpen && !resultOpen ? (
+          <HowDeceptionWorks onClose={closeHelp} />
         ) : null}
       </div>
     </main>

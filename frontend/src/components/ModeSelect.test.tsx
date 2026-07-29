@@ -14,6 +14,7 @@ describe("ModeSelect", () => {
         }}
         busy={false}
         onStart={onStart}
+        onHelp={vi.fn()}
       />,
     );
 
@@ -37,6 +38,7 @@ describe("ModeSelect", () => {
         }}
         busy={false}
         onStart={() => undefined}
+        onHelp={vi.fn()}
       />,
     );
 

@@ -12,13 +12,66 @@ test("practice can be solved with the physical keyboard", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Word found." }),
   ).toBeVisible();
-  await expect(page.getByText("CRANE")).toBeVisible();
+  await expect(page.getByRole("dialog").getByText("CRANE")).toBeVisible();
+  await expect(
+    page.getByText(
+      "The lie was waiting on row 1. Solving the word kept that row truthful.",
+    ),
+  ).toBeVisible();
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   const serious = accessibility.violations.filter((violation) =>
     ["serious", "critical"].includes(violation.impact ?? ""),
   );
   expect(serious).toEqual([]);
+});
+
+test("an activated lie is audited after the game", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Play Practice" }).click();
+
+  await page.getByRole("table").click();
+  await page.keyboard.type("slate", { delay: 25 });
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("1 of 6 guesses")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Enter", exact: true }),
+  ).toBeEnabled();
+  await page.keyboard.type("crane");
+  await page.keyboard.press("Enter");
+
+  await expect(
+    page.getByText(
+      /Row 1 lied\. T was shown as in the word in another position\./,
+    ),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close result" }).click();
+  await expect(page.getByRole("button", { name: "View result" })).toBeVisible();
+  await page.getByRole("button", { name: "View result" }).click();
+  await expect(
+    page.getByRole("heading", { name: "What happened" }),
+  ).toBeVisible();
+});
+
+test("How Deception Works is keyboard accessible", async ({ page }) => {
+  await page.goto("/");
+  const trigger = page.getByRole("button", {
+    name: "How Deception Works",
+  });
+  await trigger.focus();
+  await trigger.press("Enter");
+
+  await expect(
+    page.getByRole("heading", { name: "How Deception Works" }),
+  ).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  const serious = accessibility.violations.filter((violation) =>
+    ["serious", "critical"].includes(violation.impact ?? ""),
+  );
+  expect(serious).toEqual([]);
+
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
 });
 
 test("practice can be solved with the on-screen keyboard", async ({ page }) => {
@@ -120,8 +173,14 @@ test("focus order and reduced-motion reveal remain usable", async ({
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Play Daily" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "How Deception Works" }),
+  ).toBeVisible();
 
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "How Deception Works" }),
+  ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Play Daily" })).toBeFocused();
   await page.keyboard.press("Tab");

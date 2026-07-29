@@ -13,7 +13,7 @@ export default defineConfig({
   retries: 0,
   reporter: "line",
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:5174",
     trace: "retain-on-failure",
   },
   projects: [
@@ -53,12 +53,14 @@ export default defineConfig({
         DECEPTION_DAILY_SEED: "e2e-seed",
         DECEPTION_FIXED_ANSWER: "crane",
         DECEPTION_FIXED_NOW: "2026-07-28T12:00:00Z",
+        DECEPTION_FIXED_LIE_ROW: "1",
+        DECEPTION_FIXED_SESSION_SEED: "seed-0",
       },
     },
     {
-      command: "npm run dev --workspace @deception/frontend",
+      command: "npm run dev --workspace @deception/frontend -- --port 5174",
       cwd: projectRoot,
-      url: "http://127.0.0.1:5173",
+      url: "http://127.0.0.1:5174",
       reuseExistingServer: false,
       env: {
         ...process.env,
