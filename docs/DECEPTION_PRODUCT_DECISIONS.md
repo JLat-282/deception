@@ -74,86 +74,45 @@ precedence: solving the word is sufficient.
 
 ### Locked behavior
 
-- Only one deception effect may be active at a time.
-- The truthful result is calculated before any deception is applied.
-- A deception may alter:
-  - A tile's displayed color.
-  - A tile's displayed letter.
-  - A tile's displayed position.
-- The winning row cannot contain a lie.
-- The same board position cannot be selected to lie repeatedly.
-- Educated guessing is acceptable. The puzzle does not have to reduce to one
-  logically guaranteed answer at every step.
-- Every lie is revealed after a win or loss.
-- Higher difficulty presets increase deception predictably at the rules level,
-  although a player's exact experience may vary because of randomized events.
+- A basic lie changes feedback coloring only.
+- A lie never changes a submitted letter or tile position. Letter covering,
+  substitutions, and position changes are punishments or modifiers.
+- Truthful feedback is calculated before deception.
+- One lie means one secretly scheduled row, not one guaranteed lying tile.
+- Standard mode schedules one row from attempts one through six.
+- If an eligible row is reached, at most one tile may display false feedback.
+- The lie may conceal truth or create false certainty.
+- Winning guesses and attempt six remain truthful.
+- A scheduled row may never be reached, so a game may contain no activated lie.
+- If no believable one-tile mutation exists, the row stays truthful.
+- Every activated or avoided lie is explained after the game.
+- Daily and Practice both use these rules.
 
-### Lie scope and visibility
+### Scope, counts, and visibility
 
-`WORKING INTERPRETATION`: The engine must support multiple lie-budget policies
-because the answers selected "both" per-row and per-puzzle behavior.
-
-Supported scope values:
-
-```text
-PER_PUZZLE
-PER_GUESS
-```
-
-Supported visibility values:
-
-```text
-KNOWN
-HIDDEN
-```
-
-The mode configuration determines the scope, amount, and whether the amount is
-shown to the player.
-
-The standard launch mode uses a `PER_PUZZLE` lie budget and the amount is
-`KNOWN` to the player.
+- Standard mode uses one `PER_PUZZLE` scheduled row.
+- Daily uses one shared scheduled row for the puzzle.
+- Practice creates a new schedule per game.
+- A scheduled-row count is not the same as an activated-tile count.
+- Future difficulties may conceal how many rows are scheduled or allow a
+  scheduled row to affect multiple tiles.
+- The base mode screen does not display a live lie count or warning.
+- The current rules are available through “How Deception Works.”
 
 ### Lie planning
 
-`WORKING INTERPRETATION`:
+- Filter the answer corpus against all previously displayed rows.
+- Group the current guess's possible feedback patterns across surviving
+  alternative answers.
+- Consider only patterns that differ from truth at exactly one tile.
+- Reject patterns unsupported by a curated alternative answer.
+- Reject false all-green feedback.
+- Use the hidden seed to select between hiding information and fabricating it.
+- Prefer a focused, non-empty decoy group and break ties deterministically.
+- Do not force a lie when no credible pattern remains.
 
-- The deception plan is created when the game begins.
-- Early guesses may be modified more freely.
-- Once a player receives enough repeated confirmation of a fact, later lies should
-  not contradict that confirmed fact.
-- The initial confirmation threshold is two consistent observations, but it must be
-  configurable by game mode.
-
-Example:
-
-1. Guess one returns green in position three.
-2. Guess two repeats that letter in position three and returns green again.
-3. Position three is now confirmed.
-4. A later deception should not change that confirmed fact to yellow or gray.
-
-### Clarification: a lie that gives away the answer
-
-A deception can accidentally help more than it hurts.
-
-Example:
-
-- The answer is `CRANE`.
-- The player guesses `SLATE`.
-- A letter-changing lie replaces the displayed `S` with `C` and marks it green.
-- The deception has introduced a correct first letter and position that the player
-  did not earn from the guess.
-
-Another example is a false feedback pattern that eliminates every candidate except
-the actual answer.
-
-`OPEN`: Decide whether this is allowed as part of the chaos or whether the engine
-must reject and reroll any deception that introduces an unseen correct answer fact.
-
-Recommended safe default:
-
-- A lie may distort submitted information.
-- A lie should not introduce a correct answer letter that was absent from the
-  submitted guess.
+Confirmed-information locks are implicit: a fixed alternative answer must
+satisfy the complete visible history.
 
 ---
 
@@ -496,11 +455,11 @@ The truth engine must not know about screen shaking, timers, or visual deception
 
 Responsible for:
 
-- Selecting lie targets.
-- Transforming displayed letter, color, or position.
-- Respecting confirmed-information locks.
-- Preventing repeated lies in the same position.
-- Recording the original and deceptive feedback for post-game reveal.
+- Selecting the secretly scheduled row.
+- Transforming one displayed feedback marker.
+- Finding patterns supported by plausible alternative answers.
+- Preserving complete visible-history consistency.
+- Keeping truthful and displayed feedback for post-game reveal.
 
 ### 3. Modifier engine
 
@@ -518,35 +477,9 @@ Responsible for:
 
 ### 4. Mode configuration
 
-Do not hard-code difficulty behavior across the engines. Define it in presets.
-
-Suggested configuration model:
-
-```yaml
-id: standard
-wordLength:
-  type: fixed
-  value: 5
-maxGuesses: 6
-
-lieBudget:
-  scope: PER_PUZZLE
-  amount: 1
-  visibility: KNOWN
-  maxSimultaneous: 1
-  confirmationThreshold: 2
-
-modifiers:
-  maxSimultaneous: 1
-  announceBeforeActivation: false
-  allowed:
-    - cover_letters
-    - next_guess_timer
-
-accessibility:
-  reducedMotionFallback: fade
-  allowFlashing: false
-```
+Layer 2A implements only the shared standard behavior for Daily and Practice.
+A generalized difficulty or modifier configuration system is deferred until a
+second playable difficulty is defined.
 
 ---
 
@@ -554,10 +487,10 @@ accessibility:
 
 ### Priority 0 decision status
 
-1. `RESOLVED`: Standard launch lie scope is `PER_PUZZLE`.
-2. `RESOLVED`: Standard launch lie-budget visibility is `KNOWN`.
-3. `OPEN - LAYER 2`: Decide whether a letter-changing lie may introduce a
-   correct answer letter absent from the submitted guess.
+1. `RESOLVED`: Standard launch schedules one `PER_PUZZLE` row.
+2. `RESOLVED`: Lie-budget visibility may vary by future difficulty.
+3. `RESOLVED`: Basic lies change feedback only. Letter-changing effects are
+   punishments or modifiers.
 4. `RESOLVED`: The Daily reset occurs at `03:00 UTC`.
 5. `PARTIALLY RESOLVED - LATER LAYER`: Infinite mode starts with five lives and
    replenishes one life every hour to a cap of five. Loss and restoration rules
@@ -611,6 +544,6 @@ The first implementation should include:
 14. Server-authoritative daily timing.
 15. Reduced-motion fades and non-color-only feedback.
 
-The standard lie scope and budget visibility are locked. The remaining Layer 2
-blocker is whether a letter-changing lie may introduce an unseen correct answer
-fact.
+Layer 2A's feedback-only lie contract is locked. Future difficulty work must
+decide how many rows may be scheduled, how many tiles a row may affect, and
+whether those counts are visible.

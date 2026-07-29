@@ -2,7 +2,7 @@
   "name": "deception",
   "version": "0.1.0",
   "private": true,
-  "description": "Deception Layer 1 truthful core closed playtest",
+  "description": "A five-letter word game where the feedback can lie",
   "engines": {
     "node": ">=22"
   },
@@ -14,7 +14,7 @@
     "dev:api": ".venv\\Scripts\\python.exe -m uvicorn backend.app.main:app --reload --port 8000",
     "dev:web": "npm run dev --workspace @deception/frontend",
     "test": "npm run test:backend && npm run test:frontend",
-    "test:backend": ".venv\\Scripts\\python.exe -m pytest backend/tests -q --basetemp=.pytest-tmp -o cache_dir=.pytest-cache",
+    "test:backend": ".venv\\Scripts\\python.exe backend/run_tests.py",
     "test:frontend": "npm run test --workspace @deception/frontend",
     "test:e2e": "npm run test:e2e --workspace @deception/frontend",
     "build": "npm run build:frontend && .venv\\Scripts\\python.exe -m compileall -q backend/app",
