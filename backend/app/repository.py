@@ -10,6 +10,7 @@ from typing import Iterator, Literal
 
 GameMode = Literal["daily", "practice"]
 GameStatus = Literal["playing", "won", "lost"]
+CURRENT_RULES_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class StoredGame:
     answer: str
     status: GameStatus
     guess_count: int
+    rules_version: int
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,21 @@ class DailyAttempt:
     puzzle_key: str
     game_id: str
     consumed_at: str | None
+
+
+@dataclass(frozen=True)
+class StoredGuess:
+    attempt: int
+    guess: str
+    truth_feedback: str
+    display_feedback: str
+
+
+@dataclass(frozen=True)
+class DeceptionSchedule:
+    scheduled_attempt: int
+    seed: str
+    strategy_version: int
 
 
 SCHEMA = """
@@ -82,6 +99,28 @@ CREATE TABLE IF NOT EXISTS guesses (
 """
 
 
+MIGRATION_1 = """
+CREATE TABLE IF NOT EXISTS deception_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    daily_puzzle_key TEXT REFERENCES daily_puzzles(puzzle_key),
+    game_id TEXT REFERENCES games(id),
+    ordinal INTEGER NOT NULL DEFAULT 1 CHECK (ordinal >= 1),
+    scheduled_attempt INTEGER NOT NULL CHECK (
+        scheduled_attempt BETWEEN 1 AND 6
+    ),
+    seed TEXT NOT NULL,
+    strategy_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    CHECK (
+        (daily_puzzle_key IS NOT NULL AND game_id IS NULL)
+        OR (daily_puzzle_key IS NULL AND game_id IS NOT NULL)
+    ),
+    UNIQUE (daily_puzzle_key, ordinal),
+    UNIQUE (game_id, ordinal)
+);
+"""
+
+
 class Repository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -95,10 +134,46 @@ class Repository:
         connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
+    @staticmethod
+    def _execute_script(
+        connection: sqlite3.Connection, script: str
+    ) -> None:
+        """Execute static schema statements without ending the active transaction."""
+        statement = ""
+        for line in script.splitlines():
+            statement += f"{line}\n"
+            if not sqlite3.complete_statement(statement):
+                continue
+            if statement.strip():
+                connection.execute(statement)
+            statement = ""
+        if statement.strip():
+            raise sqlite3.OperationalError("Incomplete schema statement.")
+
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
-            connection.executescript(SCHEMA)
+            connection.execute("BEGIN EXCLUSIVE")
+            self._execute_script(connection, SCHEMA)
+            version = int(
+                connection.execute("PRAGMA user_version").fetchone()[0]
+            )
+            if version < 1:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(games)"
+                    ).fetchall()
+                }
+                if "rules_version" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE games
+                        ADD COLUMN rules_version INTEGER NOT NULL DEFAULT 1
+                        """
+                    )
+                connection.execute("PRAGMA user_version = 1")
+            self._execute_script(connection, MIGRATION_1)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -194,8 +269,8 @@ class Repository:
             """
             INSERT INTO games(
                 id, device_id, mode, puzzle_key, answer, status,
-                guess_count, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'playing', 0, ?, ?)
+                guess_count, created_at, updated_at, rules_version
+            ) VALUES (?, ?, ?, ?, ?, 'playing', 0, ?, ?, ?)
             """,
             (
                 game_id,
@@ -205,6 +280,7 @@ class Repository:
                 answer,
                 timestamp,
                 timestamp,
+                CURRENT_RULES_VERSION,
             ),
         )
         return StoredGame(
@@ -215,6 +291,7 @@ class Repository:
             answer=answer,
             status="playing",
             guess_count=0,
+            rules_version=CURRENT_RULES_VERSION,
         )
 
     @staticmethod
@@ -240,7 +317,8 @@ class Repository:
     ) -> StoredGame | None:
         row = connection.execute(
             """
-            SELECT id, device_id, mode, puzzle_key, answer, status, guess_count
+            SELECT id, device_id, mode, puzzle_key, answer, status,
+                   guess_count, rules_version
             FROM games
             WHERE id = ?
             """,
@@ -256,7 +334,117 @@ class Repository:
             answer=row["answer"],
             status=row["status"],
             guess_count=row["guess_count"],
+            rules_version=row["rules_version"],
         )
+
+    @staticmethod
+    def upgrade_game_rules(
+        connection: sqlite3.Connection, game_id: str
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE games
+            SET rules_version = ?
+            WHERE id = ? AND guess_count = 0
+            """,
+            (CURRENT_RULES_VERSION, game_id),
+        )
+
+    @staticmethod
+    def create_deception_schedule(
+        connection: sqlite3.Connection,
+        *,
+        scheduled_attempt: int,
+        seed: str,
+        created_at: datetime,
+        daily_puzzle_key: str | None = None,
+        game_id: str | None = None,
+    ) -> DeceptionSchedule:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO deception_schedules(
+                daily_puzzle_key, game_id, ordinal, scheduled_attempt,
+                seed, strategy_version, created_at
+            ) VALUES (?, ?, 1, ?, ?, 1, ?)
+            """,
+            (
+                daily_puzzle_key,
+                game_id,
+                scheduled_attempt,
+                seed,
+                created_at.isoformat(),
+            ),
+        )
+        schedule = Repository.get_deception_schedule(
+            connection,
+            daily_puzzle_key=daily_puzzle_key,
+            game_id=game_id,
+        )
+        if schedule is None:
+            raise sqlite3.IntegrityError(
+                "The deception schedule could not be persisted."
+            )
+        return schedule
+
+    @staticmethod
+    def get_deception_schedule(
+        connection: sqlite3.Connection,
+        *,
+        daily_puzzle_key: str | None = None,
+        game_id: str | None = None,
+    ) -> DeceptionSchedule | None:
+        if (daily_puzzle_key is None) == (game_id is None):
+            raise ValueError(
+                "Provide exactly one deception schedule scope."
+            )
+        if daily_puzzle_key is not None:
+            row = connection.execute(
+                """
+                SELECT scheduled_attempt, seed, strategy_version
+                FROM deception_schedules
+                WHERE daily_puzzle_key = ? AND ordinal = 1
+                """,
+                (daily_puzzle_key,),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                SELECT scheduled_attempt, seed, strategy_version
+                FROM deception_schedules
+                WHERE game_id = ? AND ordinal = 1
+                """,
+                (game_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return DeceptionSchedule(
+            scheduled_attempt=row["scheduled_attempt"],
+            seed=row["seed"],
+            strategy_version=row["strategy_version"],
+        )
+
+    @staticmethod
+    def list_guesses(
+        connection: sqlite3.Connection, game_id: str
+    ) -> list[StoredGuess]:
+        rows = connection.execute(
+            """
+            SELECT attempt, guess, truth_feedback, display_feedback
+            FROM guesses
+            WHERE game_id = ?
+            ORDER BY attempt
+            """,
+            (game_id,),
+        ).fetchall()
+        return [
+            StoredGuess(
+                attempt=row["attempt"],
+                guess=row["guess"],
+                truth_feedback=row["truth_feedback"],
+                display_feedback=row["display_feedback"],
+            )
+            for row in rows
+        ]
 
     @staticmethod
     def last_practice_answer(
@@ -333,4 +521,3 @@ class Repository:
             """,
             (status, attempt, timestamp, game_id),
         )
-

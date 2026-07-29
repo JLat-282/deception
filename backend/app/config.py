@@ -27,6 +27,22 @@ def _optional_utc_datetime(raw_value: str | None) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _optional_lie_row(raw_value: str | None) -> int | None:
+    if not raw_value:
+        return None
+    try:
+        row = int(raw_value)
+    except ValueError as error:
+        raise ValueError(
+            "DECEPTION_FIXED_LIE_ROW must be an integer from 1 through 6."
+        ) from error
+    if row not in range(1, 7):
+        raise ValueError(
+            "DECEPTION_FIXED_LIE_ROW must be an integer from 1 through 6."
+        )
+    return row
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
@@ -37,6 +53,8 @@ class Settings:
     secure_cookie: bool = False
     fixed_answer: str | None = None
     fixed_now: datetime | None = None
+    fixed_lie_row: int | None = None
+    fixed_session_seed: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,7 +63,7 @@ class Settings:
                 os.getenv("DECEPTION_DB_PATH", ".data/deception.sqlite")
             ),
             daily_seed=os.getenv(
-                "DECEPTION_DAILY_SEED", "local-truth-baseline-seed"
+                "DECEPTION_DAILY_SEED", "local-development-seed"
             ),
             answer_list_version=os.getenv(
                 "DECEPTION_ANSWER_LIST_VERSION", "wordle-answers-v1"
@@ -55,5 +73,11 @@ class Settings:
             fixed_answer=os.getenv("DECEPTION_FIXED_ANSWER") or None,
             fixed_now=_optional_utc_datetime(
                 os.getenv("DECEPTION_FIXED_NOW")
+            ),
+            fixed_lie_row=_optional_lie_row(
+                os.getenv("DECEPTION_FIXED_LIE_ROW")
+            ),
+            fixed_session_seed=(
+                os.getenv("DECEPTION_FIXED_SESSION_SEED") or None
             ),
         )

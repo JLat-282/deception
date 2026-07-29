@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import Settings
+from .deception import DeceptionEngine
 from .engine import TruthEngine, load_word_list
 from .errors import DomainError
 from .repository import Repository
@@ -23,7 +24,7 @@ from .schemas import (
     StartGameRequest,
     StartGameResponse,
 )
-from .service import GameService, NowProvider
+from .service import GameService, NowProvider, SeedProvider
 
 
 DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{20,128}$")
@@ -32,11 +33,14 @@ DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{20,128}$")
 def create_app(
     settings: Settings | None = None,
     now_provider: NowProvider | None = None,
+    deception_engine: DeceptionEngine | None = None,
+    session_seed_provider: SeedProvider | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_env()
     words = load_word_list(active_settings.data_dir / "words")
     answers = load_word_list(active_settings.data_dir / "answers")
     engine = TruthEngine(words, answers)
+    active_deception_engine = deception_engine or DeceptionEngine(engine)
     repository = Repository(active_settings.db_path)
     resolved_now_provider = now_provider
     if resolved_now_provider is None and active_settings.fixed_now is not None:
@@ -46,11 +50,13 @@ def create_app(
         repository,
         engine,
         now_provider=resolved_now_provider,
+        deception_engine=active_deception_engine,
+        session_seed_provider=session_seed_provider,
     )
 
     app = FastAPI(
-        title="Deception Truth Baseline API",
-        version="0.1.0",
+        title="Deception API",
+        version="0.2.0",
     )
     app.state.service = service
     app.state.settings = active_settings

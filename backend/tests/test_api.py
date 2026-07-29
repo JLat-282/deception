@@ -98,6 +98,11 @@ def test_correct_guess_wins_and_reveals_answer(client: TestClient) -> None:
         "attempt": 1,
         "status": "won",
         "answer": "crane",
+        "deception": {
+            "outcome": "notActivated",
+            "scheduledAttempt": 6,
+            "reason": "notReached",
+        },
     }
 
 
@@ -121,6 +126,11 @@ def test_six_wrong_guesses_lose_and_reveal_answer(
     )
     assert final.json()["status"] == "lost"
     assert final.json()["answer"] == "crane"
+    assert final.json()["deception"] == {
+        "outcome": "notActivated",
+        "scheduledAttempt": 6,
+        "reason": "finalAttempt",
+    }
 
 
 def test_daily_pending_game_is_reused_without_consuming(
@@ -270,6 +280,224 @@ def test_daily_answer_persists_across_application_restart(
         ).fetchone()[0]
 
     assert second_answer == first_answer
+
+
+def test_activated_lie_is_secret_until_terminal_and_then_auditable(
+    tmp_path: Path, clock
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "activated.sqlite",
+        daily_seed="activated-daily",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=1,
+        fixed_session_seed="seed-0",
+    )
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        first = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        ).json()
+        final = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "crane"},
+        ).json()
+
+    assert first == {
+        "guess": "slate",
+        "feedback": "BBGYG",
+        "attempt": 1,
+        "status": "playing",
+    }
+    assert final["deception"] == {
+        "outcome": "activated",
+        "scheduledAttempt": 1,
+        "change": {
+            "tileIndex": 3,
+            "letter": "t",
+            "truthfulFeedback": "B",
+            "displayedFeedback": "Y",
+        },
+    }
+
+
+def test_daily_schedule_is_shared_while_practice_schedules_are_per_game(
+    tmp_path: Path, clock
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "schedules.sqlite",
+        daily_seed="schedule-daily",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=4,
+    )
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as first, TestClient(app) as second:
+        start_game(first, "daily")
+        start_game(second, "daily")
+        start_game(first, "practice")
+        start_game(second, "practice")
+
+    with sqlite3.connect(settings.db_path) as connection:
+        daily_count = connection.execute(
+            """
+            SELECT COUNT(*) FROM deception_schedules
+            WHERE daily_puzzle_key = '2026-07-28'
+            """
+        ).fetchone()[0]
+        practice_count = connection.execute(
+            """
+            SELECT COUNT(*) FROM deception_schedules
+            WHERE game_id IS NOT NULL
+            """
+        ).fetchone()[0]
+
+    assert daily_count == 1
+    assert practice_count == 2
+
+
+def test_schedule_persists_across_application_restart(
+    tmp_path: Path, clock
+) -> None:
+    db_path = tmp_path / "schedule-restart.sqlite"
+    first_settings = Settings(
+        db_path=db_path,
+        daily_seed="daily",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=2,
+        fixed_session_seed="first-session",
+    )
+    first_app = create_app(settings=first_settings, now_provider=clock)
+    with TestClient(first_app) as client:
+        start_game(client, "daily")
+
+    second_settings = Settings(
+        db_path=db_path,
+        daily_seed="different",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=5,
+        fixed_session_seed="different-session",
+    )
+    second_app = create_app(settings=second_settings, now_provider=clock)
+    with TestClient(second_app) as client:
+        start_game(client, "daily")
+
+    with sqlite3.connect(db_path) as connection:
+        schedule = connection.execute(
+            """
+            SELECT scheduled_attempt, seed
+            FROM deception_schedules
+            WHERE daily_puzzle_key = '2026-07-28'
+            """
+        ).fetchone()
+
+    assert schedule == (2, "first-session")
+
+
+def test_layer_one_database_migrates_without_injecting_midgame_lie(
+    tmp_path: Path, clock
+) -> None:
+    db_path = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE devices (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE daily_puzzles (
+                puzzle_key TEXT PRIMARY KEY,
+                answer TEXT NOT NULL,
+                answer_list_version TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE games (
+                id TEXT PRIMARY KEY,
+                device_id TEXT NOT NULL REFERENCES devices(id),
+                mode TEXT NOT NULL,
+                puzzle_key TEXT,
+                answer TEXT NOT NULL,
+                status TEXT NOT NULL,
+                guess_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE daily_attempts (
+                device_id TEXT NOT NULL,
+                puzzle_key TEXT NOT NULL,
+                game_id TEXT NOT NULL UNIQUE,
+                consumed_at TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (device_id, puzzle_key)
+            );
+            CREATE TABLE guesses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                guess TEXT NOT NULL,
+                truth_feedback TEXT NOT NULL,
+                display_feedback TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (game_id, attempt)
+            );
+            INSERT INTO devices VALUES (
+                'legacy-device-12345678', '2026-07-28T12:00:00Z'
+            );
+            INSERT INTO games VALUES (
+                'legacy-game', 'legacy-device-12345678', 'practice', NULL, 'crane',
+                'playing', 1, '2026-07-28T12:00:00Z',
+                '2026-07-28T12:00:00Z'
+            );
+            INSERT INTO guesses(
+                game_id, attempt, guess, truth_feedback,
+                display_feedback, created_at
+            ) VALUES (
+                'legacy-game', 1, 'slate', 'BBGBG', 'BBGBG',
+                '2026-07-28T12:00:00Z'
+            );
+            """
+        )
+
+    settings = Settings(
+        db_path=db_path,
+        daily_seed="legacy",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=2,
+        fixed_session_seed="legacy-session",
+    )
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        client.cookies.set(
+            "deception_device", "legacy-device-12345678"
+        )
+        response = client.post(
+            "/api/games/legacy-game/guesses",
+            json={"guess": "crane"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "won"
+    assert "deception" not in response.json()
+    with sqlite3.connect(db_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        rules_version = connection.execute(
+            "SELECT rules_version FROM games WHERE id = 'legacy-game'"
+        ).fetchone()[0]
+    assert version == 1
+    assert rules_version == 1
 
 
 def test_unknown_and_finished_games_use_consistent_errors(

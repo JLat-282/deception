@@ -32,6 +32,8 @@ def settings(tmp_path: Path) -> Settings:
         answer_list_version="test-answers-v1",
         data_dir=DEFAULT_DATA_DIR,
         fixed_answer="crane",
+        fixed_lie_row=6,
+        fixed_session_seed="test-session-seed",
     )
 
 
@@ -44,4 +46,3 @@ def app(settings: Settings, clock: MutableClock):
 def client(app) -> TestClient:
     with TestClient(app) as test_client:
         yield test_client
-

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def to_camel(value: str) -> str:
@@ -54,12 +54,47 @@ class GuessRequest(APIModel):
     guess: str
 
 
+FeedbackMarker = Literal["G", "Y", "B"]
+
+
+class DeceptionChange(APIModel):
+    tile_index: int
+    letter: str
+    truthful_feedback: FeedbackMarker
+    displayed_feedback: FeedbackMarker
+
+
+class ActivatedDeceptionReveal(APIModel):
+    outcome: Literal["activated"]
+    scheduled_attempt: int
+    change: DeceptionChange
+
+
+class NotActivatedDeceptionReveal(APIModel):
+    outcome: Literal["notActivated"]
+    scheduled_attempt: int
+    reason: Literal[
+        "notReached",
+        "winningGuess",
+        "finalAttempt",
+        "noEligibleLie",
+    ]
+
+
+DeceptionReveal = (
+    ActivatedDeceptionReveal | NotActivatedDeceptionReveal
+)
+
+
 class GuessResponse(APIModel):
     guess: str
     feedback: str
     attempt: int
     status: GameStatus
     answer: str | None = None
+    deception: DeceptionReveal | None = Field(
+        default=None, discriminator="outcome"
+    )
 
 
 class HealthResponse(APIModel):
@@ -74,4 +109,3 @@ class ErrorBody(APIModel):
 
 class ErrorResponse(APIModel):
     error: ErrorBody
-
