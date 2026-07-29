@@ -93,6 +93,13 @@ describe("App", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("CRANE")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Play Again" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close result" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("keeps a short guess local and does not call the guess API", async () => {

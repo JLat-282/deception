@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@fontsource/cormorant-garamond": "^5.2.8",
-    "@fontsource/space-grotesk": "^5.2.8",
+    "@fontsource/libre-franklin": "^5.3.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
