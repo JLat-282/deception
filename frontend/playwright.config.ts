@@ -55,6 +55,7 @@ export default defineConfig({
         DECEPTION_FIXED_NOW: "2026-07-28T12:00:00Z",
         DECEPTION_FIXED_LIE_ROWS: "1,2",
         DECEPTION_FIXED_SESSION_SEED: "seed-0",
+        DECEPTION_FIXED_REVERSE_ENTRY_ROLL: "1",
       },
     },
     {

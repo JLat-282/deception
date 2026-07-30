@@ -97,6 +97,33 @@ test("practice can be solved with the on-screen keyboard", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("Reverse Entry decodes and reveals the next accepted guess", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Play Practice" }).click();
+  await expect(page.getByText("0 of 6 guesses")).toBeVisible();
+
+  await page.keyboard.type("fight");
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByText("Type your next guess backwards"),
+  ).toBeVisible();
+
+  await page.keyboard.type("enarc");
+  await page.keyboard.press("Enter");
+
+  await expect(
+    page.getByRole("status").filter({
+      hasText: "Reverse entry accepted as CRANE",
+    }),
+  ).toBeAttached();
+  await expect(
+    page.getByRole("heading", { name: "Word found." }),
+  ).toBeVisible();
+  await expect(page.getByRole("dialog").getByText("CRANE")).toBeVisible();
+});
+
 test("invalid Daily guess does not consume, valid guess does", async ({
   page,
 }) => {
@@ -134,15 +161,15 @@ test("practice loss reveals the answer after six guesses", async ({ page }) => {
   await page.getByRole("button", { name: "Play Practice" }).click();
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
-  for (const [index, guess] of [
+  for (const [index, entry] of [
     "slate",
     "fight",
-    "mould",
+    "dluom",
     "berry",
     "shack",
     "dingo",
   ].entries()) {
-    await page.keyboard.type(guess);
+    await page.keyboard.type(entry);
     await page.keyboard.press("Enter");
     if (index < 5) {
       await expect(page.getByText(`${index + 1} of 6 guesses`)).toBeVisible();
