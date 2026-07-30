@@ -25,7 +25,7 @@ export type StartGameResponse = {
   puzzleKey?: string;
 };
 
-export type DeceptionReveal =
+export type DeceptionEvent =
   | {
       outcome: "activated";
       scheduledAttempt: number;
@@ -42,6 +42,10 @@ export type DeceptionReveal =
       reason: "notReached" | "winningGuess" | "finalAttempt" | "noEligibleLie";
     };
 
+export type DeceptionReveal = {
+  events: DeceptionEvent[];
+};
+
 export type GuessResponse = {
   guess: string;
   feedback: string;
@@ -49,6 +53,9 @@ export type GuessResponse = {
   status: GameStatus;
   answer?: string;
   deception?: DeceptionReveal;
+  reverseEntry?: {
+    state: "activated" | "resolved";
+  };
 };
 
 export type ErrorResponse = {

@@ -49,6 +49,7 @@ describe("app state machine", () => {
     };
     const revealing = reducer(ready, {
       type: "GUESS_SUCCESS",
+      enteredGuess: "crane",
       payload: {
         guess: "crane",
         feedback: "GGGGG",
@@ -62,5 +63,37 @@ describe("app state machine", () => {
     expect(revealing.phase).toBe("revealing");
     expect(won.phase).toBe("won");
     expect(won.message).toBe("");
+  });
+
+  it("holds a reversed entry for normalization before feedback", () => {
+    const ready = {
+      ...initialState,
+      phase: "ready" as const,
+      bootstrap,
+      session,
+      reverseEntryActive: true,
+    };
+    const reversing = reducer(ready, {
+      type: "GUESS_SUCCESS",
+      enteredGuess: "enarc",
+      payload: {
+        guess: "crane",
+        feedback: "GGGGG",
+        attempt: 2,
+        status: "won",
+        answer: "crane",
+        reverseEntry: { state: "resolved" },
+      },
+    });
+    const revealing = reducer(reversing, { type: "REVERSE_COMPLETE" });
+
+    expect(reversing.phase).toBe("reversing");
+    expect(reversing.guesses).toEqual([]);
+    expect(reversing.reverseEntryActive).toBe(false);
+    expect(reversing.announcement).toContain(
+      "Reverse entry accepted as CRANE",
+    );
+    expect(revealing.phase).toBe("revealing");
+    expect(revealing.guesses[0]?.guess).toBe("crane");
   });
 });

@@ -16,8 +16,8 @@ export function HowDeceptionWorks({ onClose }: HowDeceptionWorksProps) {
         <section>
           <h3>The rule</h3>
           <p>
-            One row is chosen in secret. If you reach it, one tile may show the
-            wrong color.
+            Rows are selected in secret. If a row lies, only one tile in that
+            row can show the wrong color. Feedback may lie more than once.
           </p>
         </section>
         <section>
@@ -36,10 +36,19 @@ export function HowDeceptionWorks({ onClose }: HowDeceptionWorksProps) {
           </p>
         </section>
         <section>
+          <h3>Reverse Entry</h3>
+          <p>
+            A guess showing four or five absent letters triggers Reverse Entry.
+            Other accepted guesses have a small chance to trigger it. Enter the
+            next word backwards; once accepted, the row turns itself around
+            before its feedback appears.
+          </p>
+        </section>
+        <section>
           <h3>After the game</h3>
           <p>
-            We reveal the row and tile that lied. If you finished before the
-            selected row, we tell you where it was waiting.
+            Every selected row is revealed after the game, including rows that
+            stayed truthful or were never reached.
           </p>
         </section>
       </div>

@@ -15,8 +15,11 @@ test("practice can be solved with the physical keyboard", async ({ page }) => {
   await expect(page.getByRole("dialog").getByText("CRANE")).toBeVisible();
   await expect(
     page.getByText(
-      "The lie was waiting on row 1. Solving the word kept that row truthful.",
+      "Row 1 was selected, but a winning guess always stays truthful.",
     ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Row 2 was selected, but you finished before reaching it."),
   ).toBeVisible();
 
   const accessibility = await new AxeBuilder({ page }).analyze();
@@ -42,7 +45,12 @@ test("an activated lie is audited after the game", async ({ page }) => {
 
   await expect(
     page.getByText(
-      /Row 1 lied\. T was shown as in the word in another position\./,
+      /Row 1 lied\. E was shown as in the word in another position\./,
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Row 2 was selected, but a winning guess always stays truthful.",
     ),
   ).toBeVisible();
   await page.getByRole("button", { name: "Close result" }).click();

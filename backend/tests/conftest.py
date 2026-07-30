@@ -34,6 +34,7 @@ def settings(tmp_path: Path) -> Settings:
         fixed_answer="crane",
         fixed_lie_row=6,
         fixed_session_seed="test-session-seed",
+        reverse_entry_enabled=False,
     )
 
 

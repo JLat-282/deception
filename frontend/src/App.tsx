@@ -9,6 +9,7 @@ import { HowDeceptionWorks } from "./components/HowDeceptionWorks";
 import { Keyboard } from "./components/Keyboard";
 import { ModeSelect } from "./components/ModeSelect";
 import { buildKeyboardFeedback } from "./game/keyboardState";
+import { waitForRevealStart } from "./game/revealTiming";
 import { initialState, reducer } from "./game/state";
 
 function errorMessage(error: unknown): string {
@@ -77,18 +78,26 @@ export default function App() {
     if (state.currentGuess.length !== state.session.config.wordLength) {
       dispatch({
         type: "LOCAL_MESSAGE",
-        message: `Enter exactly ${state.session.config.wordLength} letters.`,
+        message: `Enter exactly ${state.session.config.wordLength} letters${
+          state.reverseEntryActive ? " backwards" : ""
+        }.`,
       });
       return;
     }
 
+    const enteredGuess = state.currentGuess;
     dispatch({ type: "SUBMITTING" });
+    const revealWindow = waitForRevealStart();
     try {
-      const result = await api.submitGuess(
-        state.session.gameId,
-        state.currentGuess,
-      );
-      dispatch({ type: "GUESS_SUCCESS", payload: result });
+      const [result] = await Promise.all([
+        api.submitGuess(state.session.gameId, state.currentGuess),
+        revealWindow,
+      ]);
+      dispatch({
+        type: "GUESS_SUCCESS",
+        payload: result,
+        enteredGuess,
+      });
     } catch (error) {
       dispatch({
         type: "FAILURE",
@@ -97,7 +106,24 @@ export default function App() {
         recoverable: isRecoverableServiceError(error),
       });
     }
-  }, [state.currentGuess, state.phase, state.session]);
+  }, [
+    state.currentGuess,
+    state.phase,
+    state.reverseEntryActive,
+    state.session,
+  ]);
+
+  useEffect(() => {
+    if (state.phase !== "reversing") return;
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const timer = window.setTimeout(
+      () => dispatch({ type: "REVERSE_COMPLETE" }),
+      reducedMotion ? 120 : 320,
+    );
+    return () => window.clearTimeout(timer);
+  }, [state.phase]);
 
   useEffect(() => {
     if (state.phase !== "revealing") return;
@@ -209,6 +235,7 @@ export default function App() {
   const finished = state.phase === "won" || state.phase === "lost";
   const inputDisabled =
     state.phase === "submitting" ||
+    state.phase === "reversing" ||
     state.phase === "revealing" ||
     finished ||
     state.phase === "error";
@@ -225,12 +252,32 @@ export default function App() {
         onHelp={openHelp}
       />
       <div className="game-stage">
+        <p className="visually-hidden" role="status" aria-live="polite">
+          {state.announcement}
+        </p>
+        {state.reverseEntryActive ? (
+          <div className="reverse-entry-strip" role="status">
+            <span aria-hidden="true">↶</span>
+            <strong>Type your next guess backwards</strong>
+            <span className="reverse-entry-example">
+              CRANE <span aria-hidden="true">→</span> ENARC
+            </span>
+          </div>
+        ) : null}
         <GameBoard
           wordLength={state.session.config.wordLength}
           maxGuesses={state.session.config.maxGuesses}
           currentGuess={state.currentGuess}
           guesses={state.guesses}
           revealing={state.phase === "revealing"}
+          reverseTransition={
+            state.reverseTransition
+              ? {
+                  enteredGuess: state.reverseTransition.enteredGuess,
+                  decodedGuess: state.reverseTransition.result.guess,
+                }
+              : null
+          }
         />
 
         <div className="game-status-line">

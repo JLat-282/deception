@@ -71,9 +71,13 @@ describe("App", () => {
           status: "won",
           answer: "crane",
           deception: {
-            outcome: "notActivated",
-            scheduledAttempt: 4,
-            reason: "notReached",
+            events: [
+              {
+                outcome: "notActivated",
+                scheduledAttempt: 4,
+                reason: "notReached",
+              },
+            ],
           },
         }),
       );
@@ -111,7 +115,9 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "View result" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(
-      screen.getByText("The lie was waiting on row 4. You finished before it."),
+      screen.getByText(
+        "Row 4 was selected, but you finished before reaching it.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -219,5 +225,135 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Enter" })).toBeEnabled(),
     );
+  });
+
+  it("activates Reverse Entry and submits the next word backwards", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(bootstrap))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          gameId: "practice-game",
+          mode: "practice",
+          config: bootstrap.config,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "fight",
+          feedback: "BBBBB",
+          attempt: 1,
+          status: "playing",
+          reverseEntry: { state: "activated" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "crane",
+          feedback: "GGGGG",
+          attempt: 2,
+          status: "won",
+          answer: "crane",
+          reverseEntry: { state: "resolved" },
+        }),
+      );
+
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Play Practice" }),
+    );
+    await screen.findByText("0 of 6 guesses");
+
+    for (const letter of "fight") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    expect(
+      await screen.findByText("Type your next guess backwards", undefined, {
+        timeout: 2_000,
+      }),
+    ).toBeInTheDocument();
+    for (const letter of "enarc") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    await screen.findByText(
+      "Reverse entry accepted as CRANE. Revealing feedback.",
+    );
+    const submitted = JSON.parse(
+      String(fetchMock.mock.calls[3]?.[1]?.body),
+    ) as { guess: string };
+    expect(submitted.guess).toBe("enarc");
+    expect(
+      await screen.findByRole(
+        "heading",
+        { name: "Word found." },
+        { timeout: 2_000 },
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps Reverse Entry active after an invalid backwards word", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(bootstrap))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          gameId: "practice-game",
+          mode: "practice",
+          config: bootstrap.config,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "fight",
+          feedback: "BBBBB",
+          attempt: 1,
+          status: "playing",
+          reverseEntry: { state: "activated" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "INVALID_REVERSED_WORD",
+              message: "Read backwards, that isn’t an accepted word.",
+            },
+          },
+          400,
+        ),
+      );
+
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Play Practice" }),
+    );
+    await screen.findByText("0 of 6 guesses");
+    for (const letter of "fight") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+    await screen.findByText("Type your next guess backwards", undefined, {
+      timeout: 2_000,
+    });
+
+    for (const letter of "zzzzz") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    expect(
+      await screen.findByText(
+        "Read backwards, that isn’t an accepted word.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Type your next guess backwards"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("cell", { name: "Z, not submitted" }),
+    ).toHaveLength(5);
   });
 });

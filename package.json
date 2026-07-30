@@ -17,6 +17,7 @@
     "test:backend": ".venv\\Scripts\\python.exe backend/run_tests.py",
     "test:frontend": "npm run test --workspace @deception/frontend",
     "test:e2e": "npm run test:e2e --workspace @deception/frontend",
+    "benchmark:deception": ".venv\\Scripts\\python.exe -m backend.benchmarks.deception_latency",
     "build": "npm run build:frontend && .venv\\Scripts\\python.exe -m compileall -q backend/app",
     "build:frontend": "npm run build --workspace @deception/frontend",
     "lint": "npm run lint --workspace @deception/frontend"

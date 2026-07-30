@@ -43,4 +43,31 @@ describe("GameBoard", () => {
     expect(screen.getByRole("cell", { name: "S, absent" })).toBeInTheDocument();
     expect(container.querySelector(".tile-marker")).not.toBeInTheDocument();
   });
+
+  it("pairs the entered and decoded letters during Reverse Entry", () => {
+    const { container } = render(
+      <GameBoard
+        wordLength={5}
+        maxGuesses={6}
+        currentGuess=""
+        guesses={[]}
+        revealing={false}
+        reverseTransition={{
+          enteredGuess: "enarc",
+          decodedGuess: "crane",
+        }}
+      />,
+    );
+
+    expect(container.querySelectorAll(".tile--reversing")).toHaveLength(5);
+    expect(container.querySelectorAll(".tile-letter--reverse-from")).toHaveLength(
+      5,
+    );
+    expect(container.querySelectorAll(".tile-letter--reverse-to")).toHaveLength(
+      5,
+    );
+    expect(
+      screen.getByRole("cell", { name: "C, not submitted" }),
+    ).toHaveTextContent("EC");
+  });
 });

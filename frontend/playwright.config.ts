@@ -53,7 +53,7 @@ export default defineConfig({
         DECEPTION_DAILY_SEED: "e2e-seed",
         DECEPTION_FIXED_ANSWER: "crane",
         DECEPTION_FIXED_NOW: "2026-07-28T12:00:00Z",
-        DECEPTION_FIXED_LIE_ROW: "1",
+        DECEPTION_FIXED_LIE_ROWS: "1,2",
         DECEPTION_FIXED_SESSION_SEED: "seed-0",
       },
     },

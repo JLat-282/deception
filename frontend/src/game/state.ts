@@ -11,6 +11,7 @@ export type AppPhase =
   | "starting"
   | "ready"
   | "submitting"
+  | "reversing"
   | "revealing"
   | "won"
   | "lost"
@@ -27,6 +28,12 @@ export type AppState = {
   message: string;
   errorScope: ErrorScope | null;
   lastMode: GameMode | null;
+  reverseEntryActive: boolean;
+  reverseTransition: {
+    enteredGuess: string;
+    result: GuessResponse;
+  } | null;
+  announcement: string;
 };
 
 export type Action =
@@ -38,7 +45,12 @@ export type Action =
   | { type: "BACKSPACE" }
   | { type: "LOCAL_MESSAGE"; message: string }
   | { type: "SUBMITTING" }
-  | { type: "GUESS_SUCCESS"; payload: GuessResponse }
+  | {
+      type: "GUESS_SUCCESS";
+      payload: GuessResponse;
+      enteredGuess: string;
+    }
+  | { type: "REVERSE_COMPLETE" }
   | { type: "REVEAL_COMPLETE" }
   | {
       type: "FAILURE";
@@ -56,6 +68,9 @@ export const initialState: AppState = {
   message: "Connecting…",
   errorScope: null,
   lastMode: null,
+  reverseEntryActive: false,
+  reverseTransition: null,
+  announcement: "",
 };
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -89,6 +104,9 @@ export function reducer(state: AppState, action: Action): AppState {
         currentGuess: "",
         message: "",
         errorScope: null,
+        reverseEntryActive: false,
+        reverseTransition: null,
+        announcement: "",
       };
     case "TYPE_LETTER":
       if (state.phase !== "ready" || !state.session) return state;
@@ -124,6 +142,21 @@ export function reducer(state: AppState, action: Action): AppState {
         errorScope: null,
       };
     case "GUESS_SUCCESS":
+      if (action.payload.reverseEntry?.state === "resolved") {
+        return {
+          ...state,
+          phase: "reversing",
+          currentGuess: "",
+          message: "",
+          errorScope: null,
+          reverseEntryActive: false,
+          reverseTransition: {
+            enteredGuess: action.enteredGuess,
+            result: action.payload,
+          },
+          announcement: `Reverse entry accepted as ${action.payload.guess.toUpperCase()}. Revealing feedback.`,
+        };
+      }
       return {
         ...state,
         phase: "revealing",
@@ -131,6 +164,16 @@ export function reducer(state: AppState, action: Action): AppState {
         currentGuess: "",
         message: "Revealing feedback…",
         errorScope: null,
+        announcement: "",
+      };
+    case "REVERSE_COMPLETE":
+      if (!state.reverseTransition) return state;
+      return {
+        ...state,
+        phase: "revealing",
+        guesses: [...state.guesses, state.reverseTransition.result],
+        reverseTransition: null,
+        message: "Revealing feedback…",
       };
     case "REVEAL_COMPLETE": {
       const latest = state.guesses.at(-1);
@@ -153,6 +196,10 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         phase: "ready",
         message: "",
+        reverseEntryActive:
+          latest.reverseEntry?.state === "activated"
+            ? true
+            : state.reverseEntryActive,
       };
     }
     case "FAILURE":

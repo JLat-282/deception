@@ -397,6 +397,50 @@ button:disabled {
   align-items: center;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.reverse-entry-strip {
+  display: flex;
+  width: min(100%, 520px);
+  min-height: 44px;
+  margin: 0 0 0.8rem;
+  padding: 0.55rem 0.85rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  color: var(--text);
+  border: 1px solid var(--crimson);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(90deg, rgb(185 17 53 / 16%), rgb(84 31 104 / 16%)),
+    var(--surface);
+  font-size: 0.86rem;
+  letter-spacing: 0.055em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.reverse-entry-strip > [aria-hidden="true"] {
+  color: var(--crimson);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.reverse-entry-example {
+  color: #d7afea;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .game-board {
   display: grid;
   gap: 5px;
@@ -433,6 +477,78 @@ button:disabled {
   font-size: clamp(2rem, 5vh, 3.1rem);
   font-weight: 700;
   line-height: 1;
+}
+
+.tile-letter--reverse-from,
+.tile-letter--reverse-to {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  backface-visibility: hidden;
+}
+
+.tile-letter--reverse-from {
+  animation: reverse-letter-out 180ms steps(1, end) var(--reverse-delay) both;
+}
+
+.tile-letter--reverse-to {
+  animation: reverse-letter-in 180ms steps(1, end) var(--reverse-delay) both;
+}
+
+.tile--reversing {
+  animation: reverse-tile 180ms ease-in-out var(--reverse-delay) both;
+}
+
+.tile--reversing.tile--reverse-center {
+  animation:
+    reverse-tile 180ms ease-in-out var(--reverse-delay) both,
+    reverse-center-pulse 180ms ease-out var(--reverse-delay) both;
+}
+
+@keyframes reverse-tile {
+  0% {
+    transform: rotateX(0);
+  }
+  50% {
+    border-color: var(--violet);
+    transform: rotateX(90deg);
+  }
+  100% {
+    transform: rotateX(0);
+  }
+}
+
+@keyframes reverse-letter-out {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes reverse-letter-in {
+  0%,
+  49% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes reverse-center-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgb(177 96 220 / 0%);
+  }
+  50% {
+    box-shadow: 0 0 18px rgb(177 96 220 / 55%);
+  }
 }
 
 .tile--g {
@@ -715,8 +831,20 @@ button:disabled {
   font-size: 1.45rem;
 }
 
-.deception-result p {
-  margin-bottom: 0;
+.deception-result ol {
+  margin: 0.75rem 0 0;
+  padding-left: 1.35rem;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.deception-result li {
+  padding-left: 0.2rem;
+  line-height: 1.55;
+}
+
+.deception-result li + li {
+  margin-top: 0.65rem;
 }
 
 .help-dialog {
@@ -965,6 +1093,14 @@ button:disabled {
     gap: 0.65rem;
     font-size: 0.78rem;
   }
+
+  .reverse-entry-strip {
+    min-height: 44px;
+    padding-inline: 0.55rem;
+    gap: 0.35rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.035em;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -980,6 +1116,25 @@ button:disabled {
   .tile--revealing {
     animation-name: tile-fade;
     animation-duration: 120ms;
+    animation-delay: 0ms;
+  }
+
+  .tile--reversing,
+  .tile--reversing.tile--reverse-center {
+    animation-name: tile-fade;
+    animation-duration: 100ms;
+    animation-delay: 0ms;
+  }
+
+  .tile-letter--reverse-from {
+    animation-name: reverse-letter-out;
+    animation-duration: 100ms;
+    animation-delay: 0ms;
+  }
+
+  .tile-letter--reverse-to {
+    animation-name: reverse-letter-in;
+    animation-duration: 100ms;
     animation-delay: 0ms;
   }
 }

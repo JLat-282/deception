@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -81,9 +81,18 @@ class NotActivatedDeceptionReveal(APIModel):
     ]
 
 
-DeceptionReveal = (
-    ActivatedDeceptionReveal | NotActivatedDeceptionReveal
-)
+DeceptionEvent = Annotated[
+    ActivatedDeceptionReveal | NotActivatedDeceptionReveal,
+    Field(discriminator="outcome"),
+]
+
+
+class DeceptionReveal(APIModel):
+    events: list[DeceptionEvent] = Field(min_length=1, max_length=2)
+
+
+class ReverseEntryUpdate(APIModel):
+    state: Literal["activated", "resolved"]
 
 
 class GuessResponse(APIModel):
@@ -92,9 +101,8 @@ class GuessResponse(APIModel):
     attempt: int
     status: GameStatus
     answer: str | None = None
-    deception: DeceptionReveal | None = Field(
-        default=None, discriminator="outcome"
-    )
+    deception: DeceptionReveal | None = None
+    reverse_entry: ReverseEntryUpdate | None = None
 
 
 class HealthResponse(APIModel):

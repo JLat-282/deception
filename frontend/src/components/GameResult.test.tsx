@@ -11,9 +11,13 @@ describe("GameResult", () => {
         answer="butch"
         attempt={6}
         deception={{
-          outcome: "notActivated",
-          scheduledAttempt: 6,
-          reason: "finalAttempt",
+          events: [
+            {
+              outcome: "notActivated",
+              scheduledAttempt: 6,
+              reason: "finalAttempt",
+            },
+          ],
         }}
         onClose={vi.fn()}
         onPractice={vi.fn()}
@@ -29,7 +33,9 @@ describe("GameResult", () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Six guesses used.")).not.toBeInTheDocument();
     expect(
-      screen.getByText("The lie was waiting on row 6. It never activated."),
+      screen.getByText(
+        "Row 6 was selected, but the final guess always stays truthful.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -59,14 +65,23 @@ describe("GameResult", () => {
         answer="crane"
         attempt={2}
         deception={{
-          outcome: "activated",
-          scheduledAttempt: 1,
-          change: {
-            tileIndex: 3,
-            letter: "t",
-            truthfulFeedback: "B",
-            displayedFeedback: "Y",
-          },
+          events: [
+            {
+              outcome: "activated",
+              scheduledAttempt: 1,
+              change: {
+                tileIndex: 3,
+                letter: "t",
+                truthfulFeedback: "B",
+                displayedFeedback: "Y",
+              },
+            },
+            {
+              outcome: "notActivated",
+              scheduledAttempt: 4,
+              reason: "notReached",
+            },
+          ],
         }}
         onClose={vi.fn()}
         onPractice={vi.fn()}
@@ -77,6 +92,11 @@ describe("GameResult", () => {
     expect(
       screen.getByText(
         /Row 1 lied\. T was shown as in the word in another position\./,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Row 4 was selected, but you finished before reaching it.",
       ),
     ).toBeInTheDocument();
   });

@@ -12,6 +12,10 @@ type GameBoardProps = {
   currentGuess: string;
   guesses: GuessResponse[];
   revealing: boolean;
+  reverseTransition?: {
+    enteredGuess: string;
+    decodedGuess: string;
+  } | null;
 };
 
 export function GameBoard({
@@ -20,6 +24,7 @@ export function GameBoard({
   currentGuess,
   guesses,
   revealing,
+  reverseTransition = null,
 }: GameBoardProps) {
   const rows = Array.from({ length: maxGuesses }, (_, index) => ({
     index,
@@ -40,13 +45,24 @@ export function GameBoard({
         {rows.map((row) => {
           const result = guesses[row.index];
           const isCurrentRow = row.index === guesses.length;
-          const letters = result?.guess ?? (isCurrentRow ? currentGuess : "");
+          const isReversingRow = isCurrentRow && reverseTransition !== null;
+          const letters =
+            result?.guess ??
+            (isReversingRow
+              ? reverseTransition.decodedGuess
+              : isCurrentRow
+                ? currentGuess
+                : "");
           const isRevealingRow = revealing && row.index === guesses.length - 1;
 
           return (
             <tr className="board-row" key={row.key}>
               {columns.map((column) => {
                 const letter = letters[column.index]?.toUpperCase() ?? "";
+                const enteredLetter = isReversingRow
+                  ? (reverseTransition.enteredGuess[column.index]?.toUpperCase() ??
+                    "")
+                  : "";
                 const marker = result?.feedback[column.index] as
                   | FeedbackMarker
                   | undefined;
@@ -63,16 +79,37 @@ export function GameBoard({
                   <td
                     className={`tile ${letter ? "tile--filled" : ""} ${stateClass} ${
                       isRevealingRow ? "tile--revealing" : ""
+                    } ${isReversingRow ? "tile--reversing" : ""} ${
+                      isReversingRow && column.index === 2
+                        ? "tile--reverse-center"
+                        : ""
                     }`}
                     aria-label={label}
                     key={column.key}
                     style={
                       {
                         "--reveal-index": column.index,
+                        "--reverse-delay":
+                          column.index === 0 || column.index === 4
+                            ? "0ms"
+                            : column.index === 1 || column.index === 3
+                              ? "40ms"
+                              : "80ms",
                       } as React.CSSProperties
                     }
                   >
-                    <span className="tile-letter">{letter}</span>
+                    {isReversingRow ? (
+                      <>
+                        <span className="tile-letter tile-letter--reverse-from">
+                          {enteredLetter}
+                        </span>
+                        <span className="tile-letter tile-letter--reverse-to">
+                          {letter}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="tile-letter">{letter}</span>
+                    )}
                   </td>
                 );
               })}

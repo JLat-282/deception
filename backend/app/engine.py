@@ -84,5 +84,30 @@ class TruthEngine:
         return guess
 
     def evaluate(self, guess: str, answer: str) -> str:
-        return make_feedback(check_guess(guess, answer))
+        # The deception planner evaluates a guess against the full answer
+        # corpus. Build its marker string directly so that hot path does not
+        # allocate a Counter, a tuple of color names, and a second mapping
+        # pass for every possible answer.
+        result = ["B", "B", "B", "B", "B"]
+        remaining: dict[str, int] = {}
 
+        for index in range(WORD_LENGTH):
+            guessed_letter = guess[index]
+            answer_letter = answer[index]
+            if guessed_letter == answer_letter:
+                result[index] = "G"
+            else:
+                remaining[answer_letter] = (
+                    remaining.get(answer_letter, 0) + 1
+                )
+
+        for index in range(WORD_LENGTH):
+            if result[index] == "G":
+                continue
+            guessed_letter = guess[index]
+            count = remaining.get(guessed_letter, 0)
+            if count:
+                result[index] = "Y"
+                remaining[guessed_letter] = count - 1
+
+        return "".join(result)

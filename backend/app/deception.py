@@ -4,9 +4,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
 import hmac
-from typing import Iterable, Literal
+from typing import Collection, Iterable, Literal
 
-from .engine import MAX_GUESSES, TruthEngine
+from .engine import MAX_GUESSES, WORD_LENGTH, TruthEngine
 
 
 FeedbackMarker = Literal["G", "Y", "B"]
@@ -45,15 +45,32 @@ class DeceptionEngine:
 
     def __init__(self, truth_engine: TruthEngine) -> None:
         self.truth_engine = truth_engine
+        yellow_support: list[dict[str, int]] = [
+            defaultdict(int) for _ in range(WORD_LENGTH)
+        ]
+        for word in truth_engine.valid_guesses:
+            for tile_index in range(WORD_LENGTH):
+                for letter in set(
+                    word[:tile_index] + word[tile_index + 1 :]
+                ):
+                    yellow_support[tile_index][letter] += 1
+        self._yellow_support = tuple(yellow_support)
 
-    @staticmethod
-    def scheduled_attempt(seed: str) -> int:
-        digest = hmac.new(
-            seed.encode("utf-8"),
-            b"scheduled-attempt:v1",
-            hashlib.sha256,
-        ).digest()
-        return int.from_bytes(digest[:8], "big") % MAX_GUESSES + 1
+    @classmethod
+    def scheduled_attempts(cls, seed: str) -> tuple[int, ...]:
+        """Return one hidden row 20% of the time and two distinct rows 80%."""
+        count = (
+            2
+            if cls._seeded_number(seed, "schedule-count:v2") % 5 != 0
+            else 1
+        )
+        ranked_attempts = sorted(
+            range(1, MAX_GUESSES + 1),
+            key=lambda attempt: cls._seeded_number(
+                seed, f"schedule-row:v2:{attempt}"
+            ),
+        )
+        return tuple(sorted(ranked_attempts[:count]))
 
     @staticmethod
     def _seeded_number(seed: str, identity: str) -> int:
@@ -86,15 +103,20 @@ class DeceptionEngine:
         truth_feedback: str,
         prior_history: Iterable[VisibleGuess],
         seed: str,
+        excluded_tile_indexes: Collection[int] = (),
+        allow_constraint_fallback: bool = True,
     ) -> DeceptionDecision:
+        visible_history = tuple(prior_history)
         pattern_counts: dict[str, int] = defaultdict(int)
         for answer in self._answers_consistent_with(
-            prior_history, real_answer
+            visible_history, real_answer
         ):
             pattern_counts[self.truth_engine.evaluate(guess, answer)] += 1
 
         candidates: list[_Candidate] = []
         for tile_index, truth_marker in enumerate(truth_feedback):
+            if tile_index in excluded_tile_indexes:
+                continue
             for display_marker in ("G", "Y", "B"):
                 if display_marker == truth_marker:
                     continue
@@ -124,7 +146,15 @@ class DeceptionEngine:
                 )
 
         if not candidates:
-            return DeceptionDecision(feedback=truth_feedback)
+            if not allow_constraint_fallback:
+                return DeceptionDecision(feedback=truth_feedback)
+            return self._constraint_backed_feedback(
+                guess=guess,
+                truth_feedback=truth_feedback,
+                prior_history=visible_history,
+                seed=seed,
+                excluded_tile_indexes=excluded_tile_indexes,
+            )
 
         preferred_tactic: Tactic = (
             "fabricate"
@@ -153,6 +183,96 @@ class DeceptionEngine:
                 seed,
                 (
                     f"candidate:v1:{candidate.feedback}:"
+                    f"{candidate.tile_index}"
+                ),
+            ),
+        )
+        return DeceptionDecision(
+            feedback=selected.feedback,
+            tile_index=selected.tile_index,
+        )
+
+    def _constraint_backed_feedback(
+        self,
+        *,
+        guess: str,
+        truth_feedback: str,
+        prior_history: tuple[VisibleGuess, ...],
+        seed: str,
+        excluded_tile_indexes: Collection[int],
+    ) -> DeceptionDecision:
+        """Fabricate a safe yellow when no curated answer supports a lie."""
+
+        previously_guessed = {
+            letter for row in prior_history for letter in row.guess
+        }
+        visible_greens: list[set[str]] = [
+            set() for _ in range(WORD_LENGTH)
+        ]
+        for row in prior_history:
+            for tile_index, marker in enumerate(row.feedback):
+                if marker == "G":
+                    visible_greens[tile_index].add(row.guess[tile_index])
+        for tile_index, marker in enumerate(truth_feedback):
+            if marker == "G":
+                visible_greens[tile_index].add(guess[tile_index])
+
+        if any(len(letters) > 1 for letters in visible_greens):
+            return DeceptionDecision(feedback=truth_feedback)
+
+        candidates: list[_Candidate] = []
+        for tile_index, truth_marker in enumerate(truth_feedback):
+            letter = guess[tile_index]
+            if (
+                truth_marker != "B"
+                or tile_index in excluded_tile_indexes
+                or letter in previously_guessed
+                or guess.count(letter) != 1
+            ):
+                continue
+            has_possible_destination = any(
+                other_index != tile_index
+                and (
+                    not visible_greens[other_index]
+                    or letter in visible_greens[other_index]
+                )
+                for other_index in range(WORD_LENGTH)
+            )
+            if not has_possible_destination:
+                continue
+            mutation = (
+                truth_feedback[:tile_index]
+                + "Y"
+                + truth_feedback[tile_index + 1 :]
+            )
+            candidates.append(
+                _Candidate(
+                    feedback=mutation,
+                    tile_index=tile_index,
+                    tactic="fabricate",
+                    decoy_count=self._yellow_support[tile_index].get(
+                        letter, 0
+                    ),
+                )
+            )
+
+        if not candidates:
+            return DeceptionDecision(feedback=truth_feedback)
+
+        strongest_support = max(
+            candidate.decoy_count for candidate in candidates
+        )
+        finalists = [
+            candidate
+            for candidate in candidates
+            if candidate.decoy_count == strongest_support
+        ]
+        selected = min(
+            finalists,
+            key=lambda candidate: self._seeded_number(
+                seed,
+                (
+                    f"constraint-candidate:v1:{candidate.feedback}:"
                     f"{candidate.tile_index}"
                 ),
             ),

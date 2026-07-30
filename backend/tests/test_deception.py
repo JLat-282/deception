@@ -22,16 +22,26 @@ def changed_indexes(truth: str, displayed: str) -> list[int]:
     ]
 
 
-def test_schedule_is_deterministic_and_covers_all_six_rows() -> None:
+def test_schedule_is_deterministic_distinct_and_weighted_around_eighty_twenty(
+) -> None:
     rows = {
-        DeceptionEngine.scheduled_attempt(f"seed-{index}")
-        for index in range(100)
+        row
+        for index in range(1_000)
+        for row in DeceptionEngine.scheduled_attempts(f"seed-{index}")
     }
+    plans = [
+        DeceptionEngine.scheduled_attempts(f"seed-{index}")
+        for index in range(1_000)
+    ]
+    two_row_count = sum(len(plan) == 2 for plan in plans)
 
     assert rows == {1, 2, 3, 4, 5, 6}
-    assert DeceptionEngine.scheduled_attempt("stable") == (
-        DeceptionEngine.scheduled_attempt("stable")
+    assert DeceptionEngine.scheduled_attempts("stable") == (
+        DeceptionEngine.scheduled_attempts("stable")
     )
+    assert all(len(plan) in {1, 2} for plan in plans)
+    assert all(len(plan) == len(set(plan)) for plan in plans)
+    assert 760 <= two_row_count <= 840
 
 
 def test_fabricated_feedback_changes_exactly_one_tile() -> None:
@@ -104,7 +114,7 @@ def test_selected_pattern_has_a_decoy_consistent_with_visible_history() -> None:
         assert decision.feedback == truth
 
 
-def test_no_believable_decoy_keeps_feedback_truthful() -> None:
+def test_constraint_backed_lie_fabricates_an_untouched_yellow() -> None:
     truth_engine = TruthEngine(
         valid_guesses=("crane", "slate"),
         answers=("crane",),
@@ -120,5 +130,127 @@ def test_no_believable_decoy_keeps_feedback_truthful() -> None:
         seed="no-decoy",
     )
 
+    assert decision.tile_index is not None
+    assert truth[decision.tile_index] == "B"
+    assert decision.feedback[decision.tile_index] == "Y"
+    assert changed_indexes(truth, decision.feedback) == [
+        decision.tile_index
+    ]
+
+
+def test_legacy_strategy_can_keep_the_strict_truthful_fallback() -> None:
+    truth_engine = TruthEngine(
+        valid_guesses=("crane", "slate"),
+        answers=("crane",),
+    )
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("slate", "crane")
+
+    decision = deception.choose_feedback(
+        guess="slate",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="legacy-strategy",
+        allow_constraint_fallback=False,
+    )
+
     assert decision.feedback == truth
     assert decision.tile_index is None
+
+
+def test_picky_can_lie_after_stare_and_cloud_against_gnash() -> None:
+    truth_engine = full_engine()
+    deception = DeceptionEngine(truth_engine)
+    answer = "gnash"
+    history = tuple(
+        VisibleGuess(
+            guess=guess,
+            feedback=truth_engine.evaluate(guess, answer),
+        )
+        for guess in ("stare", "cloud")
+    )
+    truth = truth_engine.evaluate("picky", answer)
+
+    decision = deception.choose_feedback(
+        guess="picky",
+        real_answer=answer,
+        truth_feedback=truth,
+        prior_history=history,
+        seed="picky-regression",
+    )
+
+    assert truth == "BBBBB"
+    assert decision.tile_index is not None
+    assert decision.feedback[decision.tile_index] == "Y"
+    assert "picky"[decision.tile_index] not in {
+        letter for row in history for letter in row.guess
+    }
+
+
+def test_constraint_backed_lie_does_not_reuse_a_previously_guessed_letter(
+) -> None:
+    truth_engine = TruthEngine(
+        valid_guesses=("crane", "picky"),
+        answers=("crane",),
+    )
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("picky", "crane")
+
+    decision = deception.choose_feedback(
+        guess="picky",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(VisibleGuess("picky", truth),),
+        seed="already-guessed",
+    )
+
+    assert decision.feedback == truth
+    assert decision.tile_index is None
+
+
+def test_constraint_backed_yellow_requires_an_available_other_position(
+) -> None:
+    truth_engine = TruthEngine(
+        valid_guesses=("crane", "brane"),
+        answers=("crane",),
+    )
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("brane", "crane")
+
+    decision = deception.choose_feedback(
+        guess="brane",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="no-destination",
+    )
+
+    assert truth == "BGGGG"
+    assert decision.feedback == truth
+    assert decision.tile_index is None
+
+
+def test_excluded_tile_position_cannot_be_used_by_a_later_lie() -> None:
+    truth_engine = full_engine()
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("slate", "crane")
+
+    first = deception.choose_feedback(
+        guess="slate",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="seed-0",
+    )
+    second = deception.choose_feedback(
+        guess="slate",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="seed-0",
+        excluded_tile_indexes={first.tile_index},
+    )
+
+    assert first.tile_index is not None
+    assert second.tile_index != first.tile_index

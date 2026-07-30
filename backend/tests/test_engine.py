@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app.engine import TruthEngine, check_guess, make_feedback, normalize_word
+from backend.app.engine import (
+    TruthEngine,
+    check_guess,
+    make_feedback,
+    normalize_word,
+)
 from backend.app.errors import GuessValidationError
 
 
@@ -52,6 +57,29 @@ def test_repeated_answer_letter_can_be_used_twice() -> None:
 
 def test_feedback_serialization() -> None:
     assert make_feedback(("green", "yellow", "gray", "gray", "green")) == "GYBBG"
+
+
+@pytest.mark.parametrize(
+    ("guess", "answer"),
+    (
+        ("crane", "crane"),
+        ("slate", "crane"),
+        ("eerie", "crane"),
+        ("allay", "llama"),
+        ("green", "eerie"),
+    ),
+)
+def test_truth_engine_fast_path_matches_reference_evaluation(
+    guess: str, answer: str
+) -> None:
+    engine = TruthEngine(
+        valid_guesses=(guess, answer),
+        answers=(answer,),
+    )
+
+    assert engine.evaluate(guess, answer) == make_feedback(
+        check_guess(guess, answer)
+    )
 
 
 def test_truth_engine_validates_length_and_dictionary() -> None:

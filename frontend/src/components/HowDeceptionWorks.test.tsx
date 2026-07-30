@@ -14,6 +14,10 @@ describe("HowDeceptionWorks", () => {
       screen.getByText(/Letters never change or move/),
     ).toBeInTheDocument();
     expect(
+      screen.getByText(/Feedback may lie more than once/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/80%|20%/)).not.toBeInTheDocument();
+    expect(
       screen.queryByText(/future|layer|playtest|baseline/i),
     ).not.toBeInTheDocument();
   });

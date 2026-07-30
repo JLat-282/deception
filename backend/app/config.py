@@ -43,6 +43,44 @@ def _optional_lie_row(raw_value: str | None) -> int | None:
     return row
 
 
+def _optional_lie_rows(raw_value: str | None) -> tuple[int, ...] | None:
+    if not raw_value:
+        return None
+    try:
+        rows = tuple(int(value.strip()) for value in raw_value.split(","))
+    except ValueError as error:
+        raise ValueError(
+            "DECEPTION_FIXED_LIE_ROWS must contain one or two distinct "
+            "integers from 1 through 6."
+        ) from error
+    if (
+        len(rows) not in {1, 2}
+        or len(set(rows)) != len(rows)
+        or any(row not in range(1, 7) for row in rows)
+    ):
+        raise ValueError(
+            "DECEPTION_FIXED_LIE_ROWS must contain one or two distinct "
+            "integers from 1 through 6."
+        )
+    return tuple(sorted(rows))
+
+
+def _optional_probability(raw_value: str | None) -> float | None:
+    if not raw_value:
+        return None
+    try:
+        probability = float(raw_value)
+    except ValueError as error:
+        raise ValueError(
+            "DECEPTION_FIXED_REVERSE_ENTRY_ROLL must be between 0 and 1."
+        ) from error
+    if not 0 <= probability <= 1:
+        raise ValueError(
+            "DECEPTION_FIXED_REVERSE_ENTRY_ROLL must be between 0 and 1."
+        )
+    return probability
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
@@ -54,7 +92,10 @@ class Settings:
     fixed_answer: str | None = None
     fixed_now: datetime | None = None
     fixed_lie_row: int | None = None
+    fixed_lie_rows: tuple[int, ...] | None = None
     fixed_session_seed: str | None = None
+    reverse_entry_enabled: bool = False
+    fixed_reverse_entry_roll: float | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -77,7 +118,17 @@ class Settings:
             fixed_lie_row=_optional_lie_row(
                 os.getenv("DECEPTION_FIXED_LIE_ROW")
             ),
+            fixed_lie_rows=_optional_lie_rows(
+                os.getenv("DECEPTION_FIXED_LIE_ROWS")
+            ),
             fixed_session_seed=(
                 os.getenv("DECEPTION_FIXED_SESSION_SEED") or None
+            ),
+            reverse_entry_enabled=os.getenv(
+                "DECEPTION_REVERSE_ENTRY_ENABLED", "true"
+            ).lower()
+            in {"1", "true", "yes"},
+            fixed_reverse_entry_roll=_optional_probability(
+                os.getenv("DECEPTION_FIXED_REVERSE_ENTRY_ROLL")
             ),
         )

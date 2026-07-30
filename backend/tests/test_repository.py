@@ -90,4 +90,4 @@ def test_legacy_migration_is_serialized_across_initializers(
 
     assert "rules_version" in columns
     assert schedule_table == ("deception_schedules",)
-    assert schema_version == 1
+    assert schema_version == 3

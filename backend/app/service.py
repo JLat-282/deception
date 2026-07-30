@@ -9,12 +9,13 @@ from typing import Callable
 from .clock import PuzzleWindow, daily_window
 from .config import Settings
 from .deception import DeceptionEngine, VisibleGuess
-from .engine import MAX_GUESSES, WORD_LENGTH, TruthEngine
+from .engine import MAX_GUESSES, WORD_LENGTH, TruthEngine, normalize_word
 from .errors import DomainError, GuessValidationError
 from .repository import (
     CURRENT_RULES_VERSION,
     DeceptionSchedule,
     Repository,
+    ReverseEntryState,
     StoredGame,
     StoredGuess,
 )
@@ -23,9 +24,11 @@ from .schemas import (
     BootstrapResponse,
     DailyInfo,
     DeceptionChange,
+    DeceptionReveal,
     GameConfig,
     GuessResponse,
     NotActivatedDeceptionReveal,
+    ReverseEntryUpdate,
     StartGameResponse,
 )
 
@@ -124,19 +127,24 @@ class GameService:
         ]
         return secrets.choice(choices or list(self.engine.answers))
 
-    def _create_schedule(
+    def _create_schedules(
         self,
         connection,
         game: StoredGame,
         now: datetime,
-    ) -> DeceptionSchedule:
-        existing = self._get_schedule(connection, game)
-        if existing is not None:
+    ) -> list[DeceptionSchedule]:
+        existing = self._get_schedules(connection, game)
+        if existing:
             return existing
         seed = self.session_seed_provider()
-        scheduled_attempt = (
-            self.settings.fixed_lie_row
-            or self.deception_engine.scheduled_attempt(seed)
+        scheduled_attempts = (
+            self.settings.fixed_lie_rows
+            or (
+                (self.settings.fixed_lie_row,)
+                if self.settings.fixed_lie_row is not None
+                else None
+            )
+            or self.deception_engine.scheduled_attempts(seed)
         )
         if game.mode == "daily":
             if game.puzzle_key is None:
@@ -145,40 +153,42 @@ class GameService:
                     "SERVICE_UNAVAILABLE",
                     "The Daily game is missing its puzzle key.",
                 )
-            return self.repository.create_deception_schedule(
+            return self.repository.replace_deception_schedules(
                 connection,
-                scheduled_attempt=scheduled_attempt,
+                scheduled_attempts=scheduled_attempts,
                 seed=seed,
                 created_at=now,
                 daily_puzzle_key=game.puzzle_key,
             )
-        return self.repository.create_deception_schedule(
+        return self.repository.replace_deception_schedules(
             connection,
-            scheduled_attempt=scheduled_attempt,
+            scheduled_attempts=scheduled_attempts,
             seed=seed,
             created_at=now,
             game_id=game.game_id,
         )
 
-    def _get_schedule(
+    def _get_schedules(
         self, connection, game: StoredGame
-    ) -> DeceptionSchedule | None:
+    ) -> list[DeceptionSchedule]:
         if game.mode == "daily":
             if game.puzzle_key is None:
-                return None
-            return self.repository.get_deception_schedule(
+                return []
+            return self.repository.list_deception_schedules(
                 connection, daily_puzzle_key=game.puzzle_key
             )
-        return self.repository.get_deception_schedule(
+        return self.repository.list_deception_schedules(
             connection, game_id=game.game_id
         )
 
     def _ensure_current_rules(
         self, connection, game: StoredGame, now: datetime
-    ) -> tuple[StoredGame, DeceptionSchedule | None]:
+    ) -> tuple[StoredGame, list[DeceptionSchedule]]:
         if game.rules_version < CURRENT_RULES_VERSION:
             if game.guess_count > 0:
-                return game, None
+                if game.rules_version == 1:
+                    return game, []
+                return game, self._get_schedules(connection, game)
             self.repository.upgrade_game_rules(connection, game.game_id)
             upgraded = self.repository.get_game(connection, game.game_id)
             if upgraded is None:
@@ -188,10 +198,50 @@ class GameService:
                     "The game rules could not be upgraded.",
                 )
             game = upgraded
-        schedule = self._get_schedule(connection, game)
-        if schedule is None:
-            schedule = self._create_schedule(connection, game, now)
-        return game, schedule
+        schedules = self._get_schedules(connection, game)
+        if not schedules:
+            schedules = self._create_schedules(connection, game, now)
+        self._ensure_reverse_entry_state(connection, game, now)
+        return game, schedules
+
+    def _ensure_reverse_entry_state(
+        self, connection, game: StoredGame, now: datetime
+    ) -> ReverseEntryState | None:
+        if (
+            not self.settings.reverse_entry_enabled
+            or game.rules_version < CURRENT_RULES_VERSION
+        ):
+            return None
+        state = self.repository.get_reverse_entry_state(
+            connection, game.game_id
+        )
+        if state is not None:
+            return state
+        return self.repository.create_reverse_entry_state(
+            connection,
+            game.game_id,
+            self.session_seed_provider(),
+            now,
+        )
+
+    def _reverse_entry_trigger_reason(
+        self,
+        state: ReverseEntryState,
+        display_feedback: str,
+        attempt: int,
+    ) -> str | None:
+        if display_feedback.count("B") >= 4:
+            return "lowInformation"
+        if self.settings.fixed_reverse_entry_roll is not None:
+            roll = self.settings.fixed_reverse_entry_roll
+        else:
+            digest = hmac.new(
+                state.seed.encode("utf-8"),
+                f"reverse-entry:v1:{attempt}".encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+            roll = int.from_bytes(digest[:8], "big") / 2**64
+        return "chance" if roll < 0.10 else None
 
     @staticmethod
     def _deception_reveal(
@@ -199,9 +249,15 @@ class GameService:
         guesses: list[StoredGuess],
         status: str,
     ) -> ActivatedDeceptionReveal | NotActivatedDeceptionReveal:
-        for row in guesses:
-            if row.truth_feedback == row.display_feedback:
-                continue
+        row = next(
+            (
+                guess
+                for guess in guesses
+                if guess.attempt == schedule.scheduled_attempt
+            ),
+            None,
+        )
+        if row is not None and row.truth_feedback != row.display_feedback:
             tile_index = next(
                 index
                 for index, markers in enumerate(
@@ -317,7 +373,8 @@ class GameService:
                     answer,
                     now,
                 )
-            self._create_schedule(connection, game, now)
+            self._create_schedules(connection, game, now)
+            self._ensure_reverse_entry_state(connection, game, now)
 
         return self._start_response(game)
 
@@ -332,11 +389,6 @@ class GameService:
     def submit_guess(
         self, device_id: str, game_id: str, raw_guess: str
     ) -> GuessResponse:
-        try:
-            guess = self.engine.validate_guess(raw_guess)
-        except GuessValidationError as error:
-            raise DomainError(400, error.code, error.message) from error
-
         now = self.now()
         with self.repository.transaction() as connection:
             game = self.repository.get_game(connection, game_id)
@@ -349,9 +401,30 @@ class GameService:
                     409, "GAME_FINISHED", "This game has already finished."
                 )
 
-            game, schedule = self._ensure_current_rules(
+            game, schedules = self._ensure_current_rules(
                 connection, game, now
             )
+            reverse_entry_state = self.repository.get_reverse_entry_state(
+                connection, game_id
+            )
+            reverse_entry_active = (
+                reverse_entry_state is not None
+                and reverse_entry_state.status == "active"
+            )
+            submitted_guess = normalize_word(raw_guess)
+            if reverse_entry_active:
+                submitted_guess = submitted_guess[::-1]
+            try:
+                guess = self.engine.validate_guess(submitted_guess)
+            except GuessValidationError as error:
+                if reverse_entry_active and error.code == "INVALID_WORD":
+                    raise DomainError(
+                        400,
+                        "INVALID_REVERSED_WORD",
+                        "Read backwards, that isn’t an accepted word.",
+                    ) from error
+                raise DomainError(400, error.code, error.message) from error
+
             truth_feedback = self.engine.evaluate(guess, game.answer)
             display_feedback = truth_feedback
             attempt = game.guess_count + 1
@@ -363,15 +436,37 @@ class GameService:
             else:
                 status = "playing"
 
+            schedule = next(
+                (
+                    item
+                    for item in schedules
+                    if item.scheduled_attempt == attempt
+                ),
+                None,
+            )
             if (
                 schedule is not None
-                and attempt == schedule.scheduled_attempt
                 and attempt < MAX_GUESSES
                 and status != "won"
             ):
                 prior_guesses = self.repository.list_guesses(
                     connection, game_id
                 )
+                excluded_tile_indexes = {
+                    index
+                    for row in prior_guesses
+                    for index, markers in enumerate(
+                        zip(row.truth_feedback, row.display_feedback)
+                    )
+                    if markers[0] != markers[1]
+                }
+                decision_seed = schedule.seed
+                if schedule.strategy_version >= 2:
+                    decision_seed = hmac.new(
+                        schedule.seed.encode("utf-8"),
+                        f"decision:v2:{schedule.ordinal}".encode("utf-8"),
+                        hashlib.sha256,
+                    ).hexdigest()
                 decision = self.deception_engine.choose_feedback(
                     guess=guess,
                     real_answer=game.answer,
@@ -383,7 +478,11 @@ class GameService:
                         )
                         for row in prior_guesses
                     ),
-                    seed=schedule.seed,
+                    seed=decision_seed,
+                    excluded_tile_indexes=excluded_tile_indexes,
+                    allow_constraint_fallback=(
+                        schedule.strategy_version >= 3
+                    ),
                 )
                 display_feedback = decision.feedback
 
@@ -422,12 +521,43 @@ class GameService:
                 status,
                 now,
             )
+            reverse_entry_update = None
+            if reverse_entry_active:
+                self.repository.consume_reverse_entry(
+                    connection, game_id, attempt, now
+                )
+                reverse_entry_update = ReverseEntryUpdate(state="resolved")
+            elif (
+                reverse_entry_state is not None
+                and reverse_entry_state.status == "armed"
+                and status == "playing"
+            ):
+                trigger_reason = self._reverse_entry_trigger_reason(
+                    reverse_entry_state, display_feedback, attempt
+                )
+                if trigger_reason is not None:
+                    self.repository.activate_reverse_entry(
+                        connection,
+                        game_id,
+                        attempt,
+                        trigger_reason,
+                        now,
+                    )
+                    reverse_entry_update = ReverseEntryUpdate(
+                        state="activated"
+                    )
             deception = None
-            if status in {"won", "lost"} and schedule is not None:
-                deception = self._deception_reveal(
-                    schedule,
-                    self.repository.list_guesses(connection, game_id),
-                    status,
+            if status in {"won", "lost"} and schedules:
+                terminal_guesses = self.repository.list_guesses(
+                    connection, game_id
+                )
+                deception = DeceptionReveal(
+                    events=[
+                        self._deception_reveal(
+                            item, terminal_guesses, status
+                        )
+                        for item in schedules
+                    ]
                 )
 
         return GuessResponse(
@@ -437,4 +567,5 @@ class GameService:
             status=status,
             answer=game.answer if status in {"won", "lost"} else None,
             deception=deception,
+            reverse_entry=reverse_entry_update,
         )

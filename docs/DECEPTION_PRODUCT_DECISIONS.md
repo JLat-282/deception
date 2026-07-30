@@ -1,7 +1,7 @@
 # Deception Product Decisions
 
 **Status:** Implementation reference  
-**Last updated:** 2026-07-28  
+**Last updated:** 2026-07-29
 **Source:** Product workshop answers to the seven functional layers
 
 This file is the coding source of truth for Deception. Decisions are locked unless
@@ -78,25 +78,40 @@ precedence: solving the word is sufficient.
 - A lie never changes a submitted letter or tile position. Letter covering,
   substitutions, and position changes are punishments or modifiers.
 - Truthful feedback is calculated before deception.
-- One lie means one secretly scheduled row, not one guaranteed lying tile.
-- Standard mode schedules one row from attempts one through six.
+- One scheduled lie opportunity means one secretly selected row, not one
+  guaranteed lying tile.
+- Before a game begins, Standard mode schedules two distinct rows 80% of the
+  time and one row 20% of the time. Rows are selected from attempts one through
+  six.
 - If an eligible row is reached, at most one tile may display false feedback.
 - The lie may conceal truth or create false certainty.
 - Winning guesses and attempt six remain truthful.
-- A scheduled row may never be reached, so a game may contain no activated lie.
-- If no believable one-tile mutation exists, the row stays truthful.
-- Every activated or avoided lie is explained after the game.
+- A scheduled row may never be reached or may be required to remain truthful,
+  so a game may contain zero, one, or two activated lies.
+- Prefer a one-tile mutation backed by a curated alternative answer.
+- If no answer-backed mutation exists, allow one constraint-backed false
+  yellow on a previously untouched letter when another position could
+  plausibly contain it.
+- If neither tier can produce a safe mutation, the row stays truthful.
+- A failed opportunity is never moved to a later row.
+- When two lies activate, they may not alter the same tile position.
+- Every scheduled opportunity is explained after the game, whether it
+  activated, remained truthful, or was never reached.
 - Daily and Practice both use these rules.
 
 ### Scope, counts, and visibility
 
-- Standard mode uses one `PER_PUZZLE` scheduled row.
-- Daily uses one shared scheduled row for the puzzle.
+- Standard mode uses a hidden `PER_PUZZLE` schedule containing one or two rows.
+- The schedule contains two distinct rows with 80% probability and one row
+  with 20% probability.
+- Daily uses one shared schedule for the puzzle.
 - Practice creates a new schedule per game.
 - A scheduled-row count is not the same as an activated-tile count.
-- Future difficulties may conceal how many rows are scheduled or allow a
-  scheduled row to affect multiple tiles.
+- The player is not told whether one or two rows were scheduled.
+- Future difficulties may allow a scheduled row to affect multiple tiles.
 - The base mode screen does not display a live lie count or warning.
+- Player-facing rules say that feedback may lie more than once without
+  disclosing the 80/20 schedule distribution.
 - The current rules are available through “How Deception Works.”
 
 ### Lie planning
@@ -105,14 +120,20 @@ precedence: solving the word is sufficient.
 - Group the current guess's possible feedback patterns across surviving
   alternative answers.
 - Consider only patterns that differ from truth at exactly one tile.
-- Reject patterns unsupported by a curated alternative answer.
 - Reject false all-green feedback.
 - Use the hidden seed to select between hiding information and fabricating it.
 - Prefer a focused, non-empty decoy group and break ties deterministically.
-- Do not force a lie when no credible pattern remains.
+- If no curated answer supports a mutation, consider only gray-to-yellow
+  changes on letters absent from every earlier guess.
+- Reject fallback candidates with duplicate-letter ambiguity, no available
+  alternate position, or a tile position already used by an earlier lie.
+- Rank fallback candidates by accepted-word yellow support and break ties
+  deterministically.
+- Do not force a lie when neither tier has a safe candidate.
 
-Confirmed-information locks are implicit: a fixed alternative answer must
-satisfy the complete visible history.
+Confirmed-information locks are explicit in the fallback tier and implicit in
+the primary tier, where a fixed alternative answer must satisfy the complete
+visible history.
 
 ---
 
@@ -244,6 +265,27 @@ the daily date is not enough to reproduce player-specific modifier events.
 - Deceptive tile feedback.
 - Covering, hiding, or obscuring letters.
 - A timer for the next guess.
+- Reversing the required entry order for the next guess.
+
+### First playable punishment: Reverse Entry
+
+`LOCKED`
+
+- After an accepted, nonterminal guess displays four or five absent tiles,
+  Reverse Entry activates.
+- Every other accepted, nonterminal guess has a 10% activation chance.
+- Activation uses displayed feedback, so a lie may cause or prevent it.
+- It activates at most once per game and affects the next accepted valid guess.
+- The player types the intended word backwards. The server reverses that input,
+  validates the decoded word, and stores only the decoded word.
+- Invalid input does not consume the punishment. The typed letters remain
+  editable and the backwards-entry requirement stays active.
+- The previous completed row never changes. The active row shows what the player
+  types, then turns into the decoded word before normal feedback appears.
+- Daily and Practice use the same behavior.
+- Reduced motion replaces the paired tile turn with a short crossfade.
+- This implementation is specific to Reverse Entry. It does not introduce a
+  generalized punishment engine.
 
 ### Failure consequences
 
@@ -455,7 +497,7 @@ The truth engine must not know about screen shaking, timers, or visual deception
 
 Responsible for:
 
-- Selecting the secretly scheduled row.
+- Selecting the secretly scheduled rows.
 - Transforming one displayed feedback marker.
 - Finding patterns supported by plausible alternative answers.
 - Preserving complete visible-history consistency.
@@ -487,8 +529,9 @@ second playable difficulty is defined.
 
 ### Priority 0 decision status
 
-1. `RESOLVED`: Standard launch schedules one `PER_PUZZLE` row.
-2. `RESOLVED`: Lie-budget visibility may vary by future difficulty.
+1. `RESOLVED`: Standard play schedules two distinct `PER_PUZZLE` rows 80% of
+   the time and one row 20% of the time.
+2. `RESOLVED`: Standard play hides whether one or two rows were scheduled.
 3. `RESOLVED`: Basic lies change feedback only. Letter-changing effects are
    punishments or modifiers.
 4. `RESOLVED`: The Daily reset occurs at `03:00 UTC`.
@@ -532,7 +575,8 @@ The first implementation should include:
 2. Six guesses.
 3. Standard Wordle-style truth evaluation.
 4. A separate deception layer.
-5. One active lie or modifier at a time.
+5. One or two scheduled lie opportunities, with at most one altered tile per
+   scheduled row.
 6. A truthful winning row.
 7. No repeated lie in the same position.
 8. Post-game lie revelation.
@@ -544,6 +588,7 @@ The first implementation should include:
 14. Server-authoritative daily timing.
 15. Reduced-motion fades and non-color-only feedback.
 
-Layer 2A's feedback-only lie contract is locked. Future difficulty work must
-decide how many rows may be scheduled, how many tiles a row may affect, and
-whether those counts are visible.
+Layer 2A's feedback-only lie contract is locked. Standard play uses the hidden
+80/20 one-or-two-row schedule above. Future difficulty work must decide when a
+row may affect multiple tiles and whether alternate presets expose their
+counts.

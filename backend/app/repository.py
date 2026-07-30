@@ -10,7 +10,8 @@ from typing import Iterator, Literal
 
 GameMode = Literal["daily", "practice"]
 GameStatus = Literal["playing", "won", "lost"]
-CURRENT_RULES_VERSION = 2
+CURRENT_RULES_VERSION = 4
+CURRENT_DECEPTION_STRATEGY_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -43,9 +44,20 @@ class StoredGuess:
 
 @dataclass(frozen=True)
 class DeceptionSchedule:
+    ordinal: int
     scheduled_attempt: int
     seed: str
     strategy_version: int
+
+
+@dataclass(frozen=True)
+class ReverseEntryState:
+    game_id: str
+    seed: str
+    status: Literal["armed", "active", "consumed"]
+    trigger_attempt: int | None
+    trigger_reason: Literal["lowInformation", "chance"] | None
+    consumed_attempt: int | None
 
 
 SCHEMA = """
@@ -120,6 +132,39 @@ CREATE TABLE IF NOT EXISTS deception_schedules (
 );
 """
 
+MIGRATION_2 = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_schedule_attempt
+ON deception_schedules(daily_puzzle_key, scheduled_attempt)
+WHERE daily_puzzle_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_game_schedule_attempt
+ON deception_schedules(game_id, scheduled_attempt)
+WHERE game_id IS NOT NULL;
+"""
+
+MIGRATION_3 = """
+CREATE TABLE IF NOT EXISTS reverse_entry_states (
+    game_id TEXT PRIMARY KEY REFERENCES games(id),
+    seed TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'armed'
+        CHECK (status IN ('armed', 'active', 'consumed')),
+    trigger_attempt INTEGER CHECK (trigger_attempt BETWEEN 1 AND 5),
+    trigger_reason TEXT
+        CHECK (trigger_reason IN ('lowInformation', 'chance')),
+    consumed_attempt INTEGER CHECK (consumed_attempt BETWEEN 2 AND 6),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (status = 'armed' AND trigger_attempt IS NULL
+            AND trigger_reason IS NULL AND consumed_attempt IS NULL)
+        OR (status = 'active' AND trigger_attempt IS NOT NULL
+            AND trigger_reason IS NOT NULL AND consumed_attempt IS NULL)
+        OR (status = 'consumed' AND trigger_attempt IS NOT NULL
+            AND trigger_reason IS NOT NULL AND consumed_attempt IS NOT NULL)
+    )
+);
+"""
+
 
 class Repository:
     def __init__(self, db_path: Path) -> None:
@@ -174,6 +219,12 @@ class Repository:
                     )
                 connection.execute("PRAGMA user_version = 1")
             self._execute_script(connection, MIGRATION_1)
+            if version < 2:
+                self._execute_script(connection, MIGRATION_2)
+                connection.execute("PRAGMA user_version = 2")
+            if version < 3:
+                self._execute_script(connection, MIGRATION_3)
+                connection.execute("PRAGMA user_version = 3")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -351,48 +402,69 @@ class Repository:
         )
 
     @staticmethod
-    def create_deception_schedule(
+    def replace_deception_schedules(
         connection: sqlite3.Connection,
         *,
-        scheduled_attempt: int,
+        scheduled_attempts: tuple[int, ...],
         seed: str,
         created_at: datetime,
         daily_puzzle_key: str | None = None,
         game_id: str | None = None,
-    ) -> DeceptionSchedule:
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO deception_schedules(
-                daily_puzzle_key, game_id, ordinal, scheduled_attempt,
-                seed, strategy_version, created_at
-            ) VALUES (?, ?, 1, ?, ?, 1, ?)
-            """,
-            (
-                daily_puzzle_key,
-                game_id,
-                scheduled_attempt,
-                seed,
-                created_at.isoformat(),
-            ),
-        )
-        schedule = Repository.get_deception_schedule(
+    ) -> list[DeceptionSchedule]:
+        if (daily_puzzle_key is None) == (game_id is None):
+            raise ValueError("Provide exactly one deception schedule scope.")
+        if (
+            len(scheduled_attempts) not in {1, 2}
+            or len(set(scheduled_attempts)) != len(scheduled_attempts)
+            or any(attempt not in range(1, 7) for attempt in scheduled_attempts)
+        ):
+            raise ValueError(
+                "A deception schedule must contain one or two distinct rows."
+            )
+        if daily_puzzle_key is not None:
+            connection.execute(
+                "DELETE FROM deception_schedules WHERE daily_puzzle_key = ?",
+                (daily_puzzle_key,),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM deception_schedules WHERE game_id = ?",
+                (game_id,),
+            )
+
+        for ordinal, scheduled_attempt in enumerate(
+            sorted(scheduled_attempts), start=1
+        ):
+            connection.execute(
+                """
+                INSERT INTO deception_schedules(
+                    daily_puzzle_key, game_id, ordinal, scheduled_attempt,
+                    seed, strategy_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    daily_puzzle_key,
+                    game_id,
+                    ordinal,
+                    scheduled_attempt,
+                    seed,
+                    CURRENT_DECEPTION_STRATEGY_VERSION,
+                    created_at.isoformat(),
+                ),
+            )
+        return Repository.list_deception_schedules(
             connection,
             daily_puzzle_key=daily_puzzle_key,
             game_id=game_id,
         )
-        if schedule is None:
-            raise sqlite3.IntegrityError(
-                "The deception schedule could not be persisted."
-            )
-        return schedule
 
     @staticmethod
-    def get_deception_schedule(
+    def list_deception_schedules(
         connection: sqlite3.Connection,
         *,
         daily_puzzle_key: str | None = None,
         game_id: str | None = None,
-    ) -> DeceptionSchedule | None:
+    ) -> list[DeceptionSchedule]:
         if (daily_puzzle_key is None) == (game_id is None):
             raise ValueError(
                 "Provide exactly one deception schedule scope."
@@ -400,28 +472,32 @@ class Repository:
         if daily_puzzle_key is not None:
             row = connection.execute(
                 """
-                SELECT scheduled_attempt, seed, strategy_version
+                SELECT ordinal, scheduled_attempt, seed, strategy_version
                 FROM deception_schedules
-                WHERE daily_puzzle_key = ? AND ordinal = 1
+                WHERE daily_puzzle_key = ?
+                ORDER BY scheduled_attempt, ordinal
                 """,
                 (daily_puzzle_key,),
-            ).fetchone()
+            ).fetchall()
         else:
             row = connection.execute(
                 """
-                SELECT scheduled_attempt, seed, strategy_version
+                SELECT ordinal, scheduled_attempt, seed, strategy_version
                 FROM deception_schedules
-                WHERE game_id = ? AND ordinal = 1
+                WHERE game_id = ?
+                ORDER BY scheduled_attempt, ordinal
                 """,
                 (game_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return DeceptionSchedule(
-            scheduled_attempt=row["scheduled_attempt"],
-            seed=row["seed"],
-            strategy_version=row["strategy_version"],
-        )
+            ).fetchall()
+        return [
+            DeceptionSchedule(
+                ordinal=item["ordinal"],
+                scheduled_attempt=item["scheduled_attempt"],
+                seed=item["seed"],
+                strategy_version=item["strategy_version"],
+            )
+            for item in row
+        ]
 
     @staticmethod
     def list_guesses(
@@ -445,6 +521,93 @@ class Repository:
             )
             for row in rows
         ]
+
+    @staticmethod
+    def create_reverse_entry_state(
+        connection: sqlite3.Connection,
+        game_id: str,
+        seed: str,
+        created_at: datetime,
+    ) -> ReverseEntryState:
+        timestamp = created_at.isoformat()
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO reverse_entry_states(
+                game_id, seed, status, trigger_attempt, trigger_reason,
+                consumed_attempt, created_at, updated_at
+            ) VALUES (?, ?, 'armed', NULL, NULL, NULL, ?, ?)
+            """,
+            (game_id, seed, timestamp, timestamp),
+        )
+        state = Repository.get_reverse_entry_state(connection, game_id)
+        if state is None:
+            raise sqlite3.IntegrityError(
+                "Reverse Entry state could not be created."
+            )
+        return state
+
+    @staticmethod
+    def get_reverse_entry_state(
+        connection: sqlite3.Connection, game_id: str
+    ) -> ReverseEntryState | None:
+        row = connection.execute(
+            """
+            SELECT game_id, seed, status, trigger_attempt, trigger_reason,
+                   consumed_attempt
+            FROM reverse_entry_states
+            WHERE game_id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ReverseEntryState(
+            game_id=row["game_id"],
+            seed=row["seed"],
+            status=row["status"],
+            trigger_attempt=row["trigger_attempt"],
+            trigger_reason=row["trigger_reason"],
+            consumed_attempt=row["consumed_attempt"],
+        )
+
+    @staticmethod
+    def activate_reverse_entry(
+        connection: sqlite3.Connection,
+        game_id: str,
+        trigger_attempt: int,
+        trigger_reason: Literal["lowInformation", "chance"],
+        updated_at: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE reverse_entry_states
+            SET status = 'active', trigger_attempt = ?, trigger_reason = ?,
+                updated_at = ?
+            WHERE game_id = ? AND status = 'armed'
+            """,
+            (
+                trigger_attempt,
+                trigger_reason,
+                updated_at.isoformat(),
+                game_id,
+            ),
+        )
+
+    @staticmethod
+    def consume_reverse_entry(
+        connection: sqlite3.Connection,
+        game_id: str,
+        consumed_attempt: int,
+        updated_at: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE reverse_entry_states
+            SET status = 'consumed', consumed_attempt = ?, updated_at = ?
+            WHERE game_id = ? AND status = 'active'
+            """,
+            (consumed_attempt, updated_at.isoformat(), game_id),
+        )
 
     @staticmethod
     def last_practice_answer(

@@ -1,4 +1,5 @@
 import type {
+  DeceptionEvent,
   DeceptionReveal,
   FeedbackMarker,
   GameMode,
@@ -33,19 +34,22 @@ export function GameResult({
     B: "absent",
   };
 
-  let deceptionSummary: string | null = null;
-  if (deception?.outcome === "activated") {
-    const { change } = deception;
-    deceptionSummary = `Row ${deception.scheduledAttempt} lied. ${change.letter.toUpperCase()} was shown as ${feedbackText[change.displayedFeedback]}. It was actually ${feedbackText[change.truthfulFeedback]}.`;
-  } else if (deception?.reason === "notReached") {
-    deceptionSummary = `The lie was waiting on row ${deception.scheduledAttempt}. You finished before it.`;
-  } else if (deception?.reason === "winningGuess") {
-    deceptionSummary = `The lie was waiting on row ${deception.scheduledAttempt}. Solving the word kept that row truthful.`;
-  } else if (deception?.reason === "finalAttempt") {
-    deceptionSummary = "The lie was waiting on row 6. It never activated.";
-  } else if (deception?.reason === "noEligibleLie") {
-    deceptionSummary = "No lie was activated.";
-  }
+  const deceptionSummary = (event: DeceptionEvent): string => {
+    if (event.outcome === "activated") {
+      const { change } = event;
+      return `Row ${event.scheduledAttempt} lied. ${change.letter.toUpperCase()} was shown as ${feedbackText[change.displayedFeedback]}. It was actually ${feedbackText[change.truthfulFeedback]}.`;
+    }
+    if (event.reason === "notReached") {
+      return `Row ${event.scheduledAttempt} was selected, but you finished before reaching it.`;
+    }
+    if (event.reason === "winningGuess") {
+      return `Row ${event.scheduledAttempt} was selected, but a winning guess always stays truthful.`;
+    }
+    if (event.reason === "finalAttempt") {
+      return `Row ${event.scheduledAttempt} was selected, but the final guess always stays truthful.`;
+    }
+    return `Row ${event.scheduledAttempt} was selected, but its feedback stayed truthful.`;
+  };
 
   return (
     <Dialog
@@ -63,10 +67,14 @@ export function GameResult({
             Solved in {attempt} {attempt === 1 ? "guess" : "guesses"}.
           </p>
         ) : null}
-        {deceptionSummary ? (
+        {deception ? (
           <section className="deception-result">
             <h3>What happened</h3>
-            <p>{deceptionSummary}</p>
+            <ol>
+              {deception.events.map((event) => (
+                <li key={event.scheduledAttempt}>{deceptionSummary(event)}</li>
+              ))}
+            </ol>
           </section>
         ) : null}
       </div>
