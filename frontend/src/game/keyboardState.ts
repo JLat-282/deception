@@ -1,4 +1,5 @@
-import type { FeedbackMarker, GuessResponse } from "../api/types";
+import type { AttemptResponse, FeedbackMarker } from "../api/types";
+import { isTimedOut } from "../api/types";
 
 export type KeyboardFeedback = Partial<Record<string, FeedbackMarker>>;
 
@@ -9,11 +10,14 @@ const FEEDBACK_RANK: Record<FeedbackMarker, number> = {
 };
 
 export function buildKeyboardFeedback(
-  guesses: GuessResponse[],
+  guesses: AttemptResponse[],
+  afterAttempt: number | null = null,
 ): KeyboardFeedback {
   const feedback: KeyboardFeedback = {};
 
   for (const result of guesses) {
+    if (afterAttempt !== null && result.attempt <= afterAttempt) continue;
+    if (isTimedOut(result)) continue;
     for (let index = 0; index < result.guess.length; index += 1) {
       const letter = result.guess[index].toUpperCase();
       const next = result.feedback[index] as FeedbackMarker;

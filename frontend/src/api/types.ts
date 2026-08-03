@@ -46,6 +46,13 @@ export type DeceptionReveal = {
   events: DeceptionEvent[];
 };
 
+export type ActivatedGuessTimer = {
+  state: "activated";
+  durationSeconds: 10 | 30;
+  startsAt: string;
+  deadlineAt: string;
+};
+
 export type GuessResponse = {
   guess: string;
   feedback: string;
@@ -56,7 +63,26 @@ export type GuessResponse = {
   reverseEntry?: {
     state: "activated" | "resolved";
   };
+  timer?: ActivatedGuessTimer | { state: "completed" };
+  blackout?: { state: "activated" };
 };
+
+export type TimedOutResponse = {
+  timedOut: true;
+  attempt: number;
+  status: GameStatus;
+  answer?: string;
+  deception?: DeceptionReveal;
+  timer: { state: "expired" };
+};
+
+export type AttemptResponse = GuessResponse | TimedOutResponse;
+
+export function isTimedOut(
+  result: AttemptResponse,
+): result is TimedOutResponse {
+  return "timedOut" in result;
+}
 
 export type ErrorResponse = {
   error: {

@@ -1,9 +1,10 @@
 import type {
+  AttemptResponse,
   BootstrapResponse,
   ErrorResponse,
   GameMode,
-  GuessResponse,
   StartGameResponse,
+  TimedOutResponse,
 } from "./types";
 
 const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -88,8 +89,12 @@ export const api = {
       body: JSON.stringify({ mode }),
     }),
   submitGuess: (gameId: string, guess: string) =>
-    request<GuessResponse>(`/api/games/${gameId}/guesses`, {
+    request<AttemptResponse>(`/api/games/${gameId}/guesses`, {
       method: "POST",
       body: JSON.stringify({ guess }),
+    }),
+  expireTimer: (gameId: string) =>
+    request<TimedOutResponse>(`/api/games/${gameId}/timer/expire`, {
+      method: "POST",
     }),
 };

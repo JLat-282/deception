@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BootstrapResponse, StartGameResponse } from "../api/types";
+import { isTimedOut } from "../api/types";
 import { initialState, reducer } from "./state";
 
 const bootstrap: BootstrapResponse = {
@@ -90,10 +91,102 @@ describe("app state machine", () => {
     expect(reversing.phase).toBe("reversing");
     expect(reversing.guesses).toEqual([]);
     expect(reversing.reverseEntryActive).toBe(false);
-    expect(reversing.announcement).toContain(
-      "Reverse entry accepted as CRANE",
-    );
+    expect(reversing.announcement).toContain("Reverse entry accepted as CRANE");
     expect(revealing.phase).toBe("revealing");
-    expect(revealing.guesses[0]?.guess).toBe("crane");
+    const revealed = revealing.guesses[0];
+    expect(revealed && !isTimedOut(revealed) ? revealed.guess : null).toBe(
+      "crane",
+    );
+  });
+
+  it("activates a scheduled timer and records a consumed timeout row", () => {
+    const ready = {
+      ...initialState,
+      phase: "ready" as const,
+      bootstrap,
+      session,
+    };
+    const firstReveal = reducer(ready, {
+      type: "GUESS_SUCCESS",
+      enteredGuess: "slate",
+      payload: {
+        guess: "slate",
+        feedback: "BBGBG",
+        attempt: 1,
+        status: "playing",
+        timer: {
+          state: "activated",
+          durationSeconds: 10,
+          startsAt: "2026-07-28T12:00:01Z",
+          deadlineAt: "2026-07-28T12:00:11Z",
+        },
+      },
+    });
+    const timed = reducer(firstReveal, { type: "REVEAL_COMPLETE" });
+    const expiring = reducer(timed, { type: "TIMER_EXPIRING" });
+    const timeoutReveal = reducer(expiring, {
+      type: "TIMEOUT_SUCCESS",
+      payload: {
+        timedOut: true,
+        attempt: 2,
+        status: "playing",
+        timer: { state: "expired" },
+      },
+    });
+    const resumed = reducer(timeoutReveal, { type: "REVEAL_COMPLETE" });
+
+    expect(timed.timerActive?.durationSeconds).toBe(10);
+    expect(expiring.phase).toBe("expiring");
+    expect(timeoutReveal.guesses).toHaveLength(2);
+    const consumedAttempt = timeoutReveal.guesses[1];
+    expect(consumedAttempt ? isTimedOut(consumedAttempt) : false).toBe(true);
+    expect(resumed.phase).toBe("ready");
+    expect(resumed.timerActive).toBeNull();
+  });
+
+  it("runs Blackout after feedback and erases information through that row", () => {
+    const ready = {
+      ...initialState,
+      phase: "ready" as const,
+      bootstrap,
+      session,
+      guesses: [
+        {
+          guess: "slate",
+          feedback: "BBGBG",
+          attempt: 1,
+          status: "playing" as const,
+        },
+        {
+          guess: "fight",
+          feedback: "BBBBB",
+          attempt: 2,
+          status: "playing" as const,
+        },
+      ],
+    };
+    const revealing = reducer(ready, {
+      type: "GUESS_SUCCESS",
+      enteredGuess: "picky",
+      payload: {
+        guess: "picky",
+        feedback: "BBBBB",
+        attempt: 3,
+        status: "playing",
+        blackout: { state: "activated" },
+      },
+    });
+    const closing = reducer(revealing, { type: "REVEAL_COMPLETE" });
+    const opening = reducer(closing, { type: "BLACKOUT_COVERED" });
+    const resumed = reducer(opening, { type: "BLACKOUT_COMPLETE" });
+
+    expect(closing.phase).toBe("blackoutClosing");
+    expect(closing.blackoutCutoffAttempt).toBeNull();
+    expect(opening.phase).toBe("blackoutOpening");
+    expect(opening.blackoutCutoffAttempt).toBe(3);
+    expect(opening.announcement).toBe(
+      "Blackout. Previous feedback has been erased.",
+    );
+    expect(resumed.phase).toBe("ready");
   });
 });

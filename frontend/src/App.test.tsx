@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import axe from "axe-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import App, { GUIDE_SEEN_STORAGE_KEY } from "./App";
 
 const bootstrap = {
   config: { wordLength: 5, maxGuesses: 6 },
@@ -12,12 +12,33 @@ const bootstrap = {
   },
 };
 
+const storage = new Map<string, string>();
+const localStorageMock = {
+  getItem: (key: string) => storage.get(key) ?? null,
+  setItem: (key: string, value: string) => storage.set(key, value),
+  removeItem: (key: string) => storage.delete(key),
+  clear: () => storage.clear(),
+  key: (index: number) => Array.from(storage.keys()).at(index) ?? null,
+  get length() {
+    return storage.size;
+  },
+};
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
 }
+
+beforeEach(() => {
+  storage.clear();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: localStorageMock,
+  });
+  window.localStorage.setItem(GUIDE_SEEN_STORAGE_KEY, "true");
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -121,24 +142,43 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens How Deception Works from the mode screen", async () => {
+  it("opens the Deception Guide from the mode screen", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(bootstrap));
     render(<App />);
 
     const help = await screen.findByRole("button", {
-      name: "How Deception Works",
+      name: "Open Deception Guide",
     });
     help.focus();
     fireEvent.click(help);
 
     expect(
-      screen.getByRole("heading", { name: "How Deception Works" }),
+      screen.getByRole("heading", { name: "Deception Guide" }),
     ).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
     expect(help).toHaveFocus();
+  });
+
+  it("opens the complete guide automatically on a first visit", async () => {
+    window.localStorage.removeItem(GUIDE_SEEN_STORAGE_KEY);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(bootstrap));
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Deception Guide" }),
+    ).toBeInTheDocument();
+    const disclosures = screen
+      .getAllByText(/How it works|Possible punishments/)
+      .map((label) => label.closest("details"));
+    expect(disclosures).toHaveLength(2);
+    expect(disclosures.every((details) => details?.hasAttribute("open"))).toBe(
+      true,
+    );
+    expect(window.localStorage.getItem(GUIDE_SEEN_STORAGE_KEY)).toBe("true");
   });
 
   it("keeps a short guess local and does not call the guess API", async () => {
@@ -225,6 +265,51 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Enter" })).toBeEnabled(),
     );
+  });
+
+  it("shows an activated Guess Timer after feedback finishes", async () => {
+    const startsAt = new Date(Date.now() + 1_000);
+    const deadlineAt = new Date(startsAt.getTime() + 30_000);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(bootstrap))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          gameId: "practice-game",
+          mode: "practice",
+          config: bootstrap.config,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "slate",
+          feedback: "BBGBG",
+          attempt: 1,
+          status: "playing",
+          timer: {
+            state: "activated",
+            durationSeconds: 30,
+            startsAt: startsAt.toISOString(),
+            deadlineAt: deadlineAt.toISOString(),
+          },
+        }),
+      );
+
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Play Practice" }),
+    );
+    await screen.findByText("0 of 6 guesses");
+    for (const letter of "slate") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    expect(
+      await screen.findByText("0:30", undefined, { timeout: 2_000 }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open Deception Guide" }),
+    ).toBeDisabled();
   });
 
   it("activates Reverse Entry and submits the next word backwards", async () => {
@@ -319,7 +404,7 @@ describe("App", () => {
           {
             error: {
               code: "INVALID_REVERSED_WORD",
-              message: "Read backwards, that isn’t an accepted word.",
+              message: "That guess isn’t accepted.",
             },
           },
           400,
@@ -345,12 +430,7 @@ describe("App", () => {
     fireEvent.keyDown(window, { key: "Enter" });
 
     expect(
-      await screen.findByText(
-        "Read backwards, that isn’t an accepted word.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Type your next guess backwards"),
+      await screen.findByText("That guess isn’t accepted."),
     ).toBeInTheDocument();
     expect(
       screen.getAllByRole("cell", { name: "Z, not submitted" }),

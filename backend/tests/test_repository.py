@@ -86,8 +86,22 @@ def test_legacy_migration_is_serialized_across_initializers(
             WHERE type = 'table' AND name = 'deception_schedules'
             """
         ).fetchone()
+        timer_table = connection.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name = 'guess_timer_states'
+            """
+        ).fetchone()
+        blackout_table = connection.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name = 'blackout_states'
+            """
+        ).fetchone()
         schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
 
     assert "rules_version" in columns
     assert schedule_table == ("deception_schedules",)
-    assert schema_version == 3
+    assert timer_table == ("guess_timer_states",)
+    assert blackout_table == ("blackout_states",)
+    assert schema_version == 5

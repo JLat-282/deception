@@ -1,16 +1,43 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { ApiError, api } from "./api/client";
 import type { GameMode } from "./api/types";
+import { BlackoutCurtain } from "./components/BlackoutCurtain";
 import { BrandHeader } from "./components/BrandHeader";
 import { FeedbackLegend } from "./components/FeedbackLegend";
 import { GameBoard } from "./components/GameBoard";
 import { GameResult } from "./components/GameResult";
+import { GuessTimer } from "./components/GuessTimer";
 import { HowDeceptionWorks } from "./components/HowDeceptionWorks";
 import { Keyboard } from "./components/Keyboard";
 import { ModeSelect } from "./components/ModeSelect";
 import { buildKeyboardFeedback } from "./game/keyboardState";
 import { waitForRevealStart } from "./game/revealTiming";
 import { initialState, reducer } from "./game/state";
+
+export const GUIDE_SEEN_STORAGE_KEY = "deception-guide-seen-v1";
+
+function hasSeenGuide(): boolean {
+  try {
+    return window.localStorage.getItem(GUIDE_SEEN_STORAGE_KEY) === "true";
+  } catch {
+    return true;
+  }
+}
+
+function rememberGuideVisit(): void {
+  try {
+    window.localStorage.setItem(GUIDE_SEEN_STORAGE_KEY, "true");
+  } catch {
+    // Storage can be unavailable in privacy-restricted browsers.
+  }
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof ApiError
@@ -29,12 +56,21 @@ function isRecoverableServiceError(error: unknown): boolean {
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [firstVisitGuide, setFirstVisitGuide] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
+  const [reverseNoticeVisible, setReverseNoticeVisible] = useState(false);
+  const guideCheckComplete = useRef(false);
 
-  const closeHelp = useCallback(() => setHelpOpen(false), []);
+  const closeHelp = useCallback(() => {
+    setHelpOpen(false);
+    setFirstVisitGuide(false);
+  }, []);
   const closeResult = useCallback(() => setResultOpen(false), []);
   const openHelp = useCallback(() => {
-    if (!resultOpen) setHelpOpen(true);
+    if (!resultOpen) {
+      setFirstVisitGuide(false);
+      setHelpOpen(true);
+    }
   }, [resultOpen]);
 
   const loadBootstrap = useCallback(async () => {
@@ -55,6 +91,16 @@ export default function App() {
   useEffect(() => {
     void loadBootstrap();
   }, [loadBootstrap]);
+
+  useEffect(() => {
+    if (!state.bootstrap || guideCheckComplete.current) return;
+    guideCheckComplete.current = true;
+    if (hasSeenGuide()) return;
+
+    rememberGuideVisit();
+    setFirstVisitGuide(true);
+    setHelpOpen(true);
+  }, [state.bootstrap]);
 
   const startGame = useCallback(async (mode: GameMode) => {
     setHelpOpen(false);
@@ -78,9 +124,7 @@ export default function App() {
     if (state.currentGuess.length !== state.session.config.wordLength) {
       dispatch({
         type: "LOCAL_MESSAGE",
-        message: `Enter exactly ${state.session.config.wordLength} letters${
-          state.reverseEntryActive ? " backwards" : ""
-        }.`,
+        message: `Enter exactly ${state.session.config.wordLength} letters.`,
       });
       return;
     }
@@ -106,12 +150,23 @@ export default function App() {
         recoverable: isRecoverableServiceError(error),
       });
     }
-  }, [
-    state.currentGuess,
-    state.phase,
-    state.reverseEntryActive,
-    state.session,
-  ]);
+  }, [state.currentGuess, state.phase, state.session]);
+
+  const expireTimer = useCallback(async () => {
+    if (!state.session || !state.timerActive) return;
+    dispatch({ type: "TIMER_EXPIRING" });
+    try {
+      const result = await api.expireTimer(state.session.gameId);
+      dispatch({ type: "TIMEOUT_SUCCESS", payload: result });
+    } catch (error) {
+      dispatch({
+        type: "FAILURE",
+        scope: "timer",
+        message: errorMessage(error),
+        recoverable: true,
+      });
+    }
+  }, [state.session, state.timerActive]);
 
   useEffect(() => {
     if (state.phase !== "reversing") return;
@@ -126,6 +181,20 @@ export default function App() {
   }, [state.phase]);
 
   useEffect(() => {
+    if (!state.reverseEntryActive) {
+      setReverseNoticeVisible(false);
+      return;
+    }
+
+    setReverseNoticeVisible(true);
+    const timer = window.setTimeout(
+      () => setReverseNoticeVisible(false),
+      7_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [state.reverseEntryActive]);
+
+  useEffect(() => {
     if (state.phase !== "revealing") return;
     const reducedMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
@@ -133,6 +202,30 @@ export default function App() {
     const timer = window.setTimeout(
       () => dispatch({ type: "REVEAL_COMPLETE" }),
       reducedMotion ? 180 : 720,
+    );
+    return () => window.clearTimeout(timer);
+  }, [state.phase]);
+
+  useEffect(() => {
+    if (state.phase !== "blackoutClosing") return;
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const timer = window.setTimeout(
+      () => dispatch({ type: "BLACKOUT_COVERED" }),
+      reducedMotion ? 80 : 160,
+    );
+    return () => window.clearTimeout(timer);
+  }, [state.phase]);
+
+  useEffect(() => {
+    if (state.phase !== "blackoutOpening") return;
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const timer = window.setTimeout(
+      () => dispatch({ type: "BLACKOUT_COMPLETE" }),
+      reducedMotion ? 100 : 340,
     );
     return () => window.clearTimeout(timer);
   }, [state.phase]);
@@ -177,8 +270,8 @@ export default function App() {
   }, [helpOpen, onBackspace, onLetter, resultOpen, submitGuess]);
 
   const keyboardFeedback = useMemo(
-    () => buildKeyboardFeedback(state.guesses),
-    [state.guesses],
+    () => buildKeyboardFeedback(state.guesses, state.blackoutCutoffAttempt),
+    [state.blackoutCutoffAttempt, state.guesses],
   );
 
   if (state.phase === "booting") {
@@ -224,7 +317,9 @@ export default function App() {
           onStart={(mode) => void startGame(mode)}
           onHelp={openHelp}
         />
-        {helpOpen ? <HowDeceptionWorks onClose={closeHelp} /> : null}
+        {helpOpen ? (
+          <HowDeceptionWorks expandAll={firstVisitGuide} onClose={closeHelp} />
+        ) : null}
       </>
     );
   }
@@ -235,8 +330,11 @@ export default function App() {
   const finished = state.phase === "won" || state.phase === "lost";
   const inputDisabled =
     state.phase === "submitting" ||
+    state.phase === "expiring" ||
     state.phase === "reversing" ||
     state.phase === "revealing" ||
+    state.phase === "blackoutClosing" ||
+    state.phase === "blackoutOpening" ||
     finished ||
     state.phase === "error";
 
@@ -244,6 +342,20 @@ export default function App() {
     <main className="game-screen">
       <BrandHeader
         mode={state.session.mode}
+        helpDisabled={
+          state.timerActive !== null ||
+          state.phase === "blackoutClosing" ||
+          state.phase === "blackoutOpening"
+        }
+        timer={
+          state.timerActive ? (
+            <GuessTimer
+              timer={state.timerActive}
+              enabled={state.phase === "ready"}
+              onExpire={() => void expireTimer()}
+            />
+          ) : undefined
+        }
         onReturn={() => {
           setHelpOpen(false);
           setResultOpen(false);
@@ -255,38 +367,43 @@ export default function App() {
         <p className="visually-hidden" role="status" aria-live="polite">
           {state.announcement}
         </p>
-        {state.reverseEntryActive ? (
-          <div className="reverse-entry-strip" role="status">
-            <span aria-hidden="true">↶</span>
-            <strong>Type your next guess backwards</strong>
-            <span className="reverse-entry-example">
-              CRANE <span aria-hidden="true">→</span> ENARC
-            </span>
-          </div>
-        ) : null}
-        <GameBoard
-          wordLength={state.session.config.wordLength}
-          maxGuesses={state.session.config.maxGuesses}
-          currentGuess={state.currentGuess}
-          guesses={state.guesses}
-          revealing={state.phase === "revealing"}
-          reverseTransition={
-            state.reverseTransition
-              ? {
-                  enteredGuess: state.reverseTransition.enteredGuess,
-                  decodedGuess: state.reverseTransition.result.guess,
-                }
-              : null
-          }
-        />
+        <div className="board-area">
+          {reverseNoticeVisible ? (
+            <div className="reverse-entry-strip" role="status">
+              <strong>Type your next guess backwards</strong>
+            </div>
+          ) : null}
+          <GameBoard
+            wordLength={state.session.config.wordLength}
+            maxGuesses={state.session.config.maxGuesses}
+            currentGuess={state.currentGuess}
+            guesses={state.guesses}
+            revealing={state.phase === "revealing"}
+            blackoutCutoffAttempt={state.blackoutCutoffAttempt}
+            reverseTransition={
+              state.reverseTransition
+                ? {
+                    enteredGuess: state.reverseTransition.enteredGuess,
+                    decodedGuess: state.reverseTransition.result.guess,
+                  }
+                : null
+            }
+          />
+        </div>
 
         <div className="game-status-line">
           {state.message ? (
             <p
               className={`game-status ${
-                state.errorScope === "guess" ? "game-status--error" : ""
+                state.errorScope === "guess" || state.errorScope === "timer"
+                  ? "game-status--error"
+                  : ""
               }`}
-              role={state.errorScope === "guess" ? "alert" : "status"}
+              role={
+                state.errorScope === "guess" || state.errorScope === "timer"
+                  ? "alert"
+                  : "status"
+              }
               aria-live="polite"
             >
               {state.message}
@@ -297,14 +414,19 @@ export default function App() {
           </p>
         </div>
 
-        {state.phase === "error" && state.errorScope === "guess" ? (
+        {state.phase === "error" &&
+        (state.errorScope === "guess" || state.errorScope === "timer") ? (
           <div className="inline-error-actions">
             <button
               className="text-button"
               type="button"
-              onClick={() => void submitGuess()}
+              onClick={() =>
+                state.errorScope === "timer"
+                  ? void expireTimer()
+                  : void submitGuess()
+              }
             >
-              Retry guess
+              {state.errorScope === "timer" ? "Retry timer" : "Retry guess"}
             </button>
             <button
               className="text-button"
@@ -351,9 +473,15 @@ export default function App() {
           />
         ) : null}
         {helpOpen && !resultOpen ? (
-          <HowDeceptionWorks onClose={closeHelp} />
+          <HowDeceptionWorks expandAll={firstVisitGuide} onClose={closeHelp} />
         ) : null}
       </div>
+      {state.phase === "blackoutClosing" ||
+      state.phase === "blackoutOpening" ? (
+        <BlackoutCurtain
+          stage={state.phase === "blackoutClosing" ? "closing" : "opening"}
+        />
+      ) : null}
     </main>
   );
 }

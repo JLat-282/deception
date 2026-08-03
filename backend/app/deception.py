@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
 import hmac
+from time import perf_counter
 from typing import Collection, Iterable, Literal
 
 from .engine import MAX_GUESSES, WORD_LENGTH, TruthEngine
@@ -38,6 +39,7 @@ class _Candidate:
 
 
 _MARKER_RANK: dict[str, int] = {"B": 0, "Y": 1, "G": 2}
+DEFAULT_DECISION_BUDGET_MS = 100
 
 
 class DeceptionEngine:
@@ -82,18 +84,26 @@ class DeceptionEngine:
         return int.from_bytes(digest[:8], "big")
 
     def _answers_consistent_with(
-        self, history: Iterable[VisibleGuess], real_answer: str
-    ) -> list[str]:
+        self,
+        history: Iterable[VisibleGuess],
+        real_answer: str,
+        deadline: float | None = None,
+    ) -> list[str] | None:
         visible_history = tuple(history)
-        return [
-            answer
-            for answer in self.truth_engine.answers
-            if answer != real_answer
-            and all(
+        consistent: list[str] = []
+        for answer in self.truth_engine.answers:
+            if self._budget_expired(deadline):
+                return None
+            if answer != real_answer and all(
                 self.truth_engine.evaluate(row.guess, answer) == row.feedback
                 for row in visible_history
-            )
-        ]
+            ):
+                consistent.append(answer)
+        return consistent
+
+    @staticmethod
+    def _budget_expired(deadline: float | None) -> bool:
+        return deadline is not None and perf_counter() >= deadline
 
     def choose_feedback(
         self,
@@ -105,16 +115,32 @@ class DeceptionEngine:
         seed: str,
         excluded_tile_indexes: Collection[int] = (),
         allow_constraint_fallback: bool = True,
+        time_budget_ms: int | None = DEFAULT_DECISION_BUDGET_MS,
     ) -> DeceptionDecision:
+        deadline = (
+            None
+            if time_budget_ms is None
+            else perf_counter() + max(0, time_budget_ms) / 1_000
+        )
+        if self._budget_expired(deadline):
+            return DeceptionDecision(feedback=truth_feedback)
+
         visible_history = tuple(prior_history)
         pattern_counts: dict[str, int] = defaultdict(int)
-        for answer in self._answers_consistent_with(
-            visible_history, real_answer
-        ):
+        consistent_answers = self._answers_consistent_with(
+            visible_history, real_answer, deadline
+        )
+        if consistent_answers is None:
+            return DeceptionDecision(feedback=truth_feedback)
+        for answer in consistent_answers:
+            if self._budget_expired(deadline):
+                return DeceptionDecision(feedback=truth_feedback)
             pattern_counts[self.truth_engine.evaluate(guess, answer)] += 1
 
         candidates: list[_Candidate] = []
         for tile_index, truth_marker in enumerate(truth_feedback):
+            if self._budget_expired(deadline):
+                return DeceptionDecision(feedback=truth_feedback)
             if tile_index in excluded_tile_indexes:
                 continue
             for display_marker in ("G", "Y", "B"):
@@ -154,6 +180,7 @@ class DeceptionEngine:
                 prior_history=visible_history,
                 seed=seed,
                 excluded_tile_indexes=excluded_tile_indexes,
+                deadline=deadline,
             )
 
         preferred_tactic: Tactic = (
@@ -200,20 +227,27 @@ class DeceptionEngine:
         prior_history: tuple[VisibleGuess, ...],
         seed: str,
         excluded_tile_indexes: Collection[int],
+        deadline: float | None,
     ) -> DeceptionDecision:
         """Fabricate a safe yellow when no curated answer supports a lie."""
 
-        previously_guessed = {
-            letter for row in prior_history for letter in row.guess
-        }
+        previously_guessed: set[str] = set()
+        for row in prior_history:
+            if self._budget_expired(deadline):
+                return DeceptionDecision(feedback=truth_feedback)
+            previously_guessed.update(row.guess)
         visible_greens: list[set[str]] = [
             set() for _ in range(WORD_LENGTH)
         ]
         for row in prior_history:
+            if self._budget_expired(deadline):
+                return DeceptionDecision(feedback=truth_feedback)
             for tile_index, marker in enumerate(row.feedback):
                 if marker == "G":
                     visible_greens[tile_index].add(row.guess[tile_index])
         for tile_index, marker in enumerate(truth_feedback):
+            if self._budget_expired(deadline):
+                return DeceptionDecision(feedback=truth_feedback)
             if marker == "G":
                 visible_greens[tile_index].add(guess[tile_index])
 
@@ -222,6 +256,8 @@ class DeceptionEngine:
 
         candidates: list[_Candidate] = []
         for tile_index, truth_marker in enumerate(truth_feedback):
+            if self._budget_expired(deadline):
+                return DeceptionDecision(feedback=truth_feedback)
             letter = guess[tile_index]
             if (
                 truth_marker != "B"

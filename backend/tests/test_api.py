@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
 
@@ -31,6 +32,66 @@ def reverse_entry_settings(
         fixed_session_seed="reverse-entry-session",
         reverse_entry_enabled=True,
         fixed_reverse_entry_roll=fixed_roll,
+    )
+
+
+def guess_timer_settings(
+    tmp_path: Path,
+    *,
+    fixed_roll: float = 0.0,
+    duration: int = 10,
+    attempt: int = 2,
+    reverse_entry_enabled: bool = False,
+) -> Settings:
+    return Settings(
+        db_path=tmp_path / (
+            f"guess-timer-{fixed_roll}-{duration}-{attempt}-"
+            f"{reverse_entry_enabled}.sqlite"
+        ),
+        daily_seed="guess-timer-daily",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=6,
+        fixed_session_seed="guess-timer-session",
+        reverse_entry_enabled=reverse_entry_enabled,
+        fixed_reverse_entry_roll=0.0,
+        guess_timer_enabled=True,
+        fixed_timer_roll=fixed_roll,
+        fixed_timer_duration=duration,
+        fixed_timer_attempt=attempt,
+    )
+
+
+def blackout_settings(
+    tmp_path: Path,
+    *,
+    attempt: int = 3,
+    reverse_entry_enabled: bool = False,
+    guess_timer_enabled: bool = False,
+    timer_attempt: int = 2,
+) -> Settings:
+    return Settings(
+        db_path=tmp_path
+        / (
+            f"blackout-{attempt}-{reverse_entry_enabled}-"
+            f"{guess_timer_enabled}-{timer_attempt}.sqlite"
+        ),
+        daily_seed="blackout-daily",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=6,
+        fixed_session_seed="blackout-session",
+        reverse_entry_enabled=reverse_entry_enabled,
+        fixed_reverse_entry_roll=1.0,
+        guess_timer_enabled=guess_timer_enabled,
+        fixed_timer_roll=0.0,
+        fixed_timer_duration=30,
+        fixed_timer_attempt=timer_attempt,
+        blackout_enabled=True,
+        fixed_blackout_roll=0.0,
+        fixed_blackout_attempt=attempt,
     )
 
 
@@ -683,7 +744,7 @@ def test_layer_one_database_migrates_without_injecting_midgame_lie(
         rules_version = connection.execute(
             "SELECT rules_version FROM games WHERE id = 'legacy-game'"
         ).fetchone()[0]
-        assert version == 3
+        assert version == 5
     assert rules_version == 1
 
 
@@ -861,7 +922,7 @@ def test_invalid_reversed_word_does_not_consume_punishment(
     assert invalid.json() == {
         "error": {
             "code": "INVALID_REVERSED_WORD",
-            "message": "Read backwards, that isn’t an accepted word.",
+            "message": "That guess isn’t accepted.",
         }
     }
     assert accepted.status_code == 200
@@ -898,3 +959,338 @@ def test_terminal_guess_never_arms_reverse_entry(
 
     assert result["status"] == "won"
     assert "reverseEntry" not in result
+
+
+def test_guess_timer_is_secretly_scheduled_with_45_percent_boundary(
+    tmp_path: Path, clock
+) -> None:
+    skipped_settings = guess_timer_settings(
+        tmp_path,
+        fixed_roll=0.45,
+    )
+    app = create_app(settings=skipped_settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+
+    assert "timer" not in game
+    with sqlite3.connect(skipped_settings.db_path) as connection:
+        state = connection.execute(
+            """
+            SELECT status, scheduled_attempt, duration_seconds
+            FROM guess_timer_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()
+    assert state == ("skipped", None, None)
+
+
+def test_timer_activation_takes_priority_over_reverse_entry(
+    tmp_path: Path, clock
+) -> None:
+    settings = guess_timer_settings(
+        tmp_path,
+        duration=30,
+        attempt=2,
+        reverse_entry_enabled=True,
+    )
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        result = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        )
+
+    assert result.status_code == 200
+    assert result.json()["timer"] == {
+        "state": "activated",
+        "durationSeconds": 30,
+        "startsAt": "2026-07-28T12:00:01Z",
+        "deadlineAt": "2026-07-28T12:00:31Z",
+    }
+    assert "reverseEntry" not in result.json()
+
+    with sqlite3.connect(settings.db_path) as connection:
+        reverse_state = connection.execute(
+            """
+            SELECT status, trigger_attempt
+            FROM reverse_entry_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()
+        timer_state = connection.execute(
+            """
+            SELECT status, scheduled_attempt, duration_seconds
+            FROM guess_timer_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()
+    assert reverse_state == ("armed", None)
+    assert timer_state == ("active", 2, 30)
+
+
+def test_timer_deadline_starts_after_deception_processing(
+    tmp_path: Path, clock, monkeypatch
+) -> None:
+    settings = replace(
+        guess_timer_settings(tmp_path, duration=10, attempt=2),
+        fixed_lie_row=1,
+    )
+    app = create_app(settings=settings, now_provider=clock)
+    choose_feedback = app.state.service.deception_engine.choose_feedback
+
+    def delayed_choose_feedback(**kwargs):
+        clock.current += timedelta(seconds=15)
+        return choose_feedback(**kwargs)
+
+    monkeypatch.setattr(
+        app.state.service.deception_engine,
+        "choose_feedback",
+        delayed_choose_feedback,
+    )
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        result = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        )
+
+    assert result.status_code == 200
+    assert result.json()["timer"] == {
+        "state": "activated",
+        "durationSeconds": 10,
+        "startsAt": "2026-07-28T12:00:16Z",
+        "deadlineAt": "2026-07-28T12:00:26Z",
+    }
+
+
+def test_timer_expiration_consumes_guess_and_is_idempotent(
+    tmp_path: Path, clock
+) -> None:
+    settings = guess_timer_settings(tmp_path, duration=10, attempt=2)
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        activated = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        )
+        invalid = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "zzzzz"},
+        )
+        clock.current += timedelta(seconds=12)
+        expired = client.post(
+            f"/api/games/{game['gameId']}/timer/expire"
+        )
+        repeated = client.post(
+            f"/api/games/{game['gameId']}/timer/expire"
+        )
+        won = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "crane"},
+        )
+
+    assert activated.json()["timer"]["durationSeconds"] == 10
+    assert invalid.status_code == 400
+    assert expired.status_code == 200
+    assert expired.json() == {
+        "timedOut": True,
+        "attempt": 2,
+        "status": "playing",
+        "timer": {"state": "expired"},
+    }
+    assert repeated.json() == expired.json()
+    assert won.json()["attempt"] == 3
+    assert won.json()["status"] == "won"
+
+    with sqlite3.connect(settings.db_path) as connection:
+        game_row = connection.execute(
+            "SELECT guess_count, status FROM games WHERE id = ?",
+            (game["gameId"],),
+        ).fetchone()
+        timer_row = connection.execute(
+            """
+            SELECT status, resolved_attempt
+            FROM guess_timer_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()
+        attempts = connection.execute(
+            """
+            SELECT attempt FROM guesses
+            WHERE game_id = ?
+            ORDER BY attempt
+            """,
+            (game["gameId"],),
+        ).fetchall()
+    assert game_row == (3, "won")
+    assert timer_row == ("expired", 2)
+    assert attempts == [(1,), (3,)]
+
+
+def test_late_guess_is_converted_to_a_timed_out_attempt(
+    tmp_path: Path, clock
+) -> None:
+    settings = guess_timer_settings(tmp_path, duration=10, attempt=2)
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        )
+        clock.current += timedelta(seconds=12)
+        late_guess = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "crane"},
+        )
+
+    assert late_guess.status_code == 200
+    assert late_guess.json() == {
+        "timedOut": True,
+        "attempt": 2,
+        "status": "playing",
+        "timer": {"state": "expired"},
+    }
+
+
+def test_blackout_activates_after_its_selected_late_game_row(
+    tmp_path: Path, clock
+) -> None:
+    settings = blackout_settings(tmp_path, attempt=3)
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        first = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        ).json()
+        second = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "fight"},
+        ).json()
+        third = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "picky"},
+        ).json()
+
+    assert "blackout" not in first
+    assert "blackout" not in second
+    assert third["blackout"] == {"state": "activated"}
+    with sqlite3.connect(settings.db_path) as connection:
+        state = connection.execute(
+            """
+            SELECT status, scheduled_attempt
+            FROM blackout_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()
+    assert state == ("activated", 3)
+
+
+def test_blackout_uses_ten_percent_selection_boundary(
+    tmp_path: Path, clock
+) -> None:
+    settings = replace(
+        blackout_settings(tmp_path, attempt=4),
+        db_path=tmp_path / "blackout-boundary.sqlite",
+        fixed_blackout_roll=0.10,
+    )
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+
+    with sqlite3.connect(settings.db_path) as connection:
+        state = connection.execute(
+            """
+            SELECT status, scheduled_attempt
+            FROM blackout_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()
+    assert state == ("skipped", None)
+
+
+def test_winning_guess_cancels_a_scheduled_blackout(
+    tmp_path: Path, clock
+) -> None:
+    settings = blackout_settings(tmp_path, attempt=3)
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        for guess in ("slate", "fight"):
+            client.post(
+                f"/api/games/{game['gameId']}/guesses",
+                json={"guess": guess},
+            )
+        result = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "crane"},
+        ).json()
+
+    assert result["status"] == "won"
+    assert "blackout" not in result
+
+
+def test_blackout_reserves_its_row_and_following_row_from_other_punishments(
+    tmp_path: Path, clock
+) -> None:
+    settings = blackout_settings(
+        tmp_path,
+        attempt=3,
+        reverse_entry_enabled=True,
+        guess_timer_enabled=True,
+        timer_attempt=3,
+    )
+    app = create_app(settings=settings, now_provider=clock)
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        first = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        ).json()
+        second = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "fight"},
+        ).json()
+        third = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "picky"},
+        ).json()
+
+    assert "reverseEntry" not in second
+    assert "reverseEntry" not in third
+    assert third["blackout"] == {"state": "activated"}
+    with sqlite3.connect(settings.db_path) as connection:
+        timer_attempt = connection.execute(
+            """
+            SELECT scheduled_attempt FROM guess_timer_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()[0]
+        reverse_state = connection.execute(
+            """
+            SELECT status, trigger_attempt FROM reverse_entry_states
+            WHERE game_id = ?
+            """,
+            (game["gameId"],),
+        ).fetchone()
+    assert timer_attempt not in {3, 4}
+    assert reverse_state == ("armed", None)

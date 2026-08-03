@@ -95,6 +95,25 @@ class ReverseEntryUpdate(APIModel):
     state: Literal["activated", "resolved"]
 
 
+class ActivatedGuessTimer(APIModel):
+    state: Literal["activated"]
+    duration_seconds: Literal[10, 30]
+    starts_at: datetime
+    deadline_at: datetime
+
+
+class CompletedGuessTimer(APIModel):
+    state: Literal["completed"]
+
+
+class ExpiredGuessTimer(APIModel):
+    state: Literal["expired"]
+
+
+class ActivatedBlackout(APIModel):
+    state: Literal["activated"]
+
+
 class GuessResponse(APIModel):
     guess: str
     feedback: str
@@ -103,6 +122,20 @@ class GuessResponse(APIModel):
     answer: str | None = None
     deception: DeceptionReveal | None = None
     reverse_entry: ReverseEntryUpdate | None = None
+    timer: ActivatedGuessTimer | CompletedGuessTimer | None = None
+    blackout: ActivatedBlackout | None = None
+
+
+class TimedOutResponse(APIModel):
+    timed_out: Literal[True] = True
+    attempt: int
+    status: GameStatus
+    answer: str | None = None
+    deception: DeceptionReveal | None = None
+    timer: ExpiredGuessTimer
+
+
+AttemptResponse = GuessResponse | TimedOutResponse
 
 
 class HealthResponse(APIModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import sleep
 
 from backend.app.deception import DeceptionEngine, VisibleGuess
 from backend.app.engine import TruthEngine, load_word_list
@@ -63,6 +64,49 @@ def test_fabricated_feedback_changes_exactly_one_tile() -> None:
     assert decision.feedback[decision.tile_index] in {"G", "Y"}
     assert truth[decision.tile_index] == "B"
     assert decision.feedback != "GGGGG"
+
+
+def test_decision_budget_falls_back_to_truthful_feedback() -> None:
+    truth_engine = full_engine()
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("slate", "crane")
+
+    decision = deception.choose_feedback(
+        guess="slate",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="budget-expired",
+        time_budget_ms=0,
+    )
+
+    assert decision.feedback == truth
+    assert not decision.activated
+
+
+def test_slow_planner_falls_back_before_exceeding_budget(monkeypatch) -> None:
+    truth_engine = full_engine()
+    original_evaluate = truth_engine.evaluate
+
+    def slow_evaluate(guess: str, answer: str) -> str:
+        sleep(0.01)
+        return original_evaluate(guess, answer)
+
+    monkeypatch.setattr(truth_engine, "evaluate", slow_evaluate)
+    deception = DeceptionEngine(truth_engine)
+    truth = original_evaluate("slate", "crane")
+
+    decision = deception.choose_feedback(
+        guess="slate",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="slow-budget",
+        time_budget_ms=5,
+    )
+
+    assert decision.feedback == truth
+    assert not decision.activated
 
 
 def test_truth_can_be_concealed() -> None:

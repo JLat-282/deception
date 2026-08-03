@@ -114,6 +114,27 @@ already using the one-row rules keep their stored schedule.
 - Two activated lies never reuse the same tile position.
 - The terminal response reveals every selected row and whether it lied.
 
+## Punishment behavior
+
+- Reverse Entry may require the next accepted word to be typed backwards.
+- Each game has a 45% chance to receive one secretly scheduled Guess Timer on
+  attempts two through six.
+- Scheduled timers are 30 seconds 70% of the time and 10 seconds 30% of the
+  time.
+- Timer deadlines are persisted and enforced by the API. Invalid words do not
+  stop or reset the countdown.
+- Expiration consumes the current attempt and records a `Time expired` row
+  without creating fake feedback.
+- Each game has a 10% chance to schedule Blackout after attempt three, four, or
+  five, with each attempt equally likely.
+- Blackout erases accumulated color feedback and resets the keyboard. Future
+  guesses reveal normally, and the full board returns after the game ends.
+- Multiple punishments may occur in one base game, but never on the same
+  attempt. Blackout also reserves the immediately following attempt so players
+  do not emerge directly into Guess Timer or Reverse Entry.
+- Guess Timer keeps priority over Reverse Entry if those two would otherwise
+  overlap.
+
 The planner filters the curated answer corpus once against the visible history,
 groups possible current feedback patterns, and selects from the smallest
 supported decoy group. Its fallback ranks safe false-yellow candidates using a

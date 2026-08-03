@@ -1,17 +1,28 @@
+import type { ReactNode } from "react";
 import type { GameMode } from "../api/types";
 
 type BrandHeaderProps = {
   mode?: GameMode;
   onReturn?: () => void;
   onHelp: () => void;
+  helpDisabled?: boolean;
+  timer?: ReactNode;
 };
 
-function HelpButton({ onHelp }: { onHelp: () => void }) {
+function HelpButton({
+  onHelp,
+  disabled = false,
+}: {
+  onHelp: () => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       className="help-button"
       type="button"
-      aria-label="How Deception Works"
+      aria-label="Open Deception Guide"
+      disabled={disabled}
+      title={disabled ? "Unavailable while the timer is running" : undefined}
       onClick={onHelp}
     >
       <span aria-hidden="true">?</span>
@@ -19,12 +30,18 @@ function HelpButton({ onHelp }: { onHelp: () => void }) {
   );
 }
 
-export function BrandHeader({ mode, onReturn, onHelp }: BrandHeaderProps) {
+export function BrandHeader({
+  mode,
+  onReturn,
+  onHelp,
+  helpDisabled = false,
+  timer,
+}: BrandHeaderProps) {
   if (!mode) {
     return (
       <header className="brand-header brand-header--select">
         <div className="select-utility">
-          <HelpButton onHelp={onHelp} />
+          <HelpButton onHelp={onHelp} disabled={helpDisabled} />
         </div>
         <h1 className="brand-title">DECEPTION</h1>
         <div className="brand-rule" aria-hidden="true" />
@@ -41,14 +58,14 @@ export function BrandHeader({ mode, onReturn, onHelp }: BrandHeaderProps) {
         </svg>
         Return to modes
       </button>
-      <div className="game-brand">
-        <h1 className="brand-title">DECEPTION</h1>
+      <div className={`game-brand ${timer ? "game-brand--timer" : ""}`}>
+        {timer ?? <h1 className="brand-title">DECEPTION</h1>}
       </div>
       <div className="game-header-actions">
         <p className={`mode-name mode-name--${mode}`}>
           {mode === "daily" ? "Daily" : "Practice"}
         </p>
-        <HelpButton onHelp={onHelp} />
+        <HelpButton onHelp={onHelp} disabled={helpDisabled} />
       </div>
     </header>
   );

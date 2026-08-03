@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { GuessResponse } from "../api/types";
 import { buildKeyboardFeedback } from "./keyboardState";
 
-function result(guess: string, feedback: string): GuessResponse {
+function result(guess: string, feedback: string, attempt = 1): GuessResponse {
   return {
     guess,
     feedback,
-    attempt: 1,
+    attempt,
     status: "playing",
   };
 }
@@ -29,6 +29,21 @@ describe("buildKeyboardFeedback", () => {
       result("eerie", "BBYBG"),
     ]);
 
+    expect(feedback.E).toBe("G");
+  });
+
+  it("rebuilds keyboard knowledge only from guesses after Blackout", () => {
+    const feedback = buildKeyboardFeedback(
+      [
+        result("crane", "GGGGG", 1),
+        result("fight", "BBBBB", 2),
+        result("eerie", "BBYBG", 3),
+      ],
+      2,
+    );
+
+    expect(feedback.C).toBeUndefined();
+    expect(feedback.F).toBeUndefined();
     expect(feedback.E).toBe("G");
   });
 });

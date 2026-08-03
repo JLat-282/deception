@@ -1,4 +1,5 @@
-import type { FeedbackMarker, GuessResponse } from "../api/types";
+import type { AttemptResponse, FeedbackMarker } from "../api/types";
+import { isTimedOut } from "../api/types";
 
 const STATE_LABEL: Record<FeedbackMarker, string> = {
   G: "correct position",
@@ -10,8 +11,9 @@ type GameBoardProps = {
   wordLength: number;
   maxGuesses: number;
   currentGuess: string;
-  guesses: GuessResponse[];
+  guesses: AttemptResponse[];
   revealing: boolean;
+  blackoutCutoffAttempt?: number | null;
   reverseTransition?: {
     enteredGuess: string;
     decodedGuess: string;
@@ -24,6 +26,7 @@ export function GameBoard({
   currentGuess,
   guesses,
   revealing,
+  blackoutCutoffAttempt = null,
   reverseTransition = null,
 }: GameBoardProps) {
   const rows = Array.from({ length: maxGuesses }, (_, index) => ({
@@ -44,36 +47,56 @@ export function GameBoard({
       <tbody>
         {rows.map((row) => {
           const result = guesses[row.index];
+          const timedOut = result ? isTimedOut(result) : false;
+          const guessResult = result && !isTimedOut(result) ? result : null;
+          const isBlackedOut =
+            guessResult !== null &&
+            blackoutCutoffAttempt !== null &&
+            guessResult.attempt <= blackoutCutoffAttempt;
           const isCurrentRow = row.index === guesses.length;
           const isReversingRow = isCurrentRow && reverseTransition !== null;
           const letters =
-            result?.guess ??
+            guessResult?.guess ??
             (isReversingRow
               ? reverseTransition.decodedGuess
               : isCurrentRow
                 ? currentGuess
                 : "");
-          const isRevealingRow = revealing && row.index === guesses.length - 1;
+          const isRevealingRow =
+            revealing && row.index === guesses.length - 1 && !timedOut;
 
           return (
-            <tr className="board-row" key={row.key}>
+            <tr
+              className={`board-row ${timedOut ? "board-row--timed-out" : ""}`}
+              key={row.key}
+            >
               {columns.map((column) => {
                 const letter = letters[column.index]?.toUpperCase() ?? "";
                 const enteredLetter = isReversingRow
-                  ? (reverseTransition.enteredGuess[column.index]?.toUpperCase() ??
-                    "")
+                  ? (reverseTransition.enteredGuess[
+                      column.index
+                    ]?.toUpperCase() ?? "")
                   : "";
-                const marker = result?.feedback[column.index] as
-                  | FeedbackMarker
-                  | undefined;
+                const marker =
+                  guessResult && !isBlackedOut
+                    ? (guessResult.feedback[column.index] as
+                        | FeedbackMarker
+                        | undefined)
+                    : undefined;
                 const stateClass = marker
                   ? `tile--${marker.toLowerCase()}`
                   : "";
-                const label = marker
-                  ? `${letter}, ${STATE_LABEL[marker]}`
-                  : letter
-                    ? `${letter}, not submitted`
-                    : `Row ${row.index + 1}, position ${column.index + 1}, empty`;
+                const label = timedOut
+                  ? column.index === 0
+                    ? `Row ${row.index + 1}, time expired`
+                    : `Row ${row.index + 1}, position ${column.index + 1}, consumed by timer`
+                  : isBlackedOut
+                    ? `${letter}, previous feedback erased by Blackout`
+                    : marker
+                      ? `${letter}, ${STATE_LABEL[marker]}`
+                      : letter
+                        ? `${letter}, not submitted`
+                        : `Row ${row.index + 1}, position ${column.index + 1}, empty`;
 
                 return (
                   <td
@@ -83,6 +106,8 @@ export function GameBoard({
                       isReversingRow && column.index === 2
                         ? "tile--reverse-center"
                         : ""
+                    } ${timedOut ? "tile--timed-out" : ""} ${
+                      isBlackedOut ? "tile--blackout" : ""
                     }`}
                     aria-label={label}
                     key={column.key}
@@ -98,7 +123,9 @@ export function GameBoard({
                       } as React.CSSProperties
                     }
                   >
-                    {isReversingRow ? (
+                    {timedOut && column.index === 0 ? (
+                      <span className="timeout-row-label">Time expired</span>
+                    ) : isReversingRow ? (
                       <>
                         <span className="tile-letter tile-letter--reverse-from">
                           {enteredLetter}

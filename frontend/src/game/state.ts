@@ -1,9 +1,12 @@
 import type {
+  ActivatedGuessTimer,
+  AttemptResponse,
   BootstrapResponse,
   GameMode,
   GuessResponse,
   StartGameResponse,
 } from "../api/types";
+import { isTimedOut } from "../api/types";
 
 export type AppPhase =
   | "booting"
@@ -11,19 +14,22 @@ export type AppPhase =
   | "starting"
   | "ready"
   | "submitting"
+  | "expiring"
   | "reversing"
   | "revealing"
+  | "blackoutClosing"
+  | "blackoutOpening"
   | "won"
   | "lost"
   | "error";
 
-export type ErrorScope = "bootstrap" | "start" | "guess";
+export type ErrorScope = "bootstrap" | "start" | "guess" | "timer";
 
 export type AppState = {
   phase: AppPhase;
   bootstrap: BootstrapResponse | null;
   session: StartGameResponse | null;
-  guesses: GuessResponse[];
+  guesses: AttemptResponse[];
   currentGuess: string;
   message: string;
   errorScope: ErrorScope | null;
@@ -33,6 +39,9 @@ export type AppState = {
     enteredGuess: string;
     result: GuessResponse;
   } | null;
+  timerActive: ActivatedGuessTimer | null;
+  pendingTimer: ActivatedGuessTimer | null;
+  blackoutCutoffAttempt: number | null;
   announcement: string;
 };
 
@@ -47,11 +56,15 @@ export type Action =
   | { type: "SUBMITTING" }
   | {
       type: "GUESS_SUCCESS";
-      payload: GuessResponse;
+      payload: AttemptResponse;
       enteredGuess: string;
     }
+  | { type: "TIMER_EXPIRING" }
+  | { type: "TIMEOUT_SUCCESS"; payload: AttemptResponse }
   | { type: "REVERSE_COMPLETE" }
   | { type: "REVEAL_COMPLETE" }
+  | { type: "BLACKOUT_COVERED" }
+  | { type: "BLACKOUT_COMPLETE" }
   | {
       type: "FAILURE";
       scope: ErrorScope;
@@ -70,8 +83,28 @@ export const initialState: AppState = {
   lastMode: null,
   reverseEntryActive: false,
   reverseTransition: null,
+  timerActive: null,
+  pendingTimer: null,
+  blackoutCutoffAttempt: null,
   announcement: "",
 };
+
+function timeoutRevealState(
+  state: AppState,
+  payload: AttemptResponse,
+): AppState {
+  return {
+    ...state,
+    phase: "revealing",
+    guesses: [...state.guesses, payload],
+    currentGuess: "",
+    message: "Time expired.",
+    errorScope: null,
+    timerActive: null,
+    pendingTimer: null,
+    announcement: `Time expired. Guess ${payload.attempt} was consumed.`,
+  };
+}
 
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -106,6 +139,9 @@ export function reducer(state: AppState, action: Action): AppState {
         errorScope: null,
         reverseEntryActive: false,
         reverseTransition: null,
+        timerActive: null,
+        pendingTimer: null,
+        blackoutCutoffAttempt: null,
         announcement: "",
       };
     case "TYPE_LETTER":
@@ -141,7 +177,17 @@ export function reducer(state: AppState, action: Action): AppState {
         message: "Checking your guess…",
         errorScope: null,
       };
+    case "TIMER_EXPIRING":
+      return {
+        ...state,
+        phase: "expiring",
+        message: "Time expired.",
+        errorScope: null,
+      };
     case "GUESS_SUCCESS":
+      if (isTimedOut(action.payload)) {
+        return timeoutRevealState(state, action.payload);
+      }
       if (action.payload.reverseEntry?.state === "resolved") {
         return {
           ...state,
@@ -154,6 +200,14 @@ export function reducer(state: AppState, action: Action): AppState {
             enteredGuess: action.enteredGuess,
             result: action.payload,
           },
+          timerActive:
+            action.payload.timer?.state === "completed"
+              ? null
+              : state.timerActive,
+          pendingTimer:
+            action.payload.timer?.state === "activated"
+              ? action.payload.timer
+              : null,
           announcement: `Reverse entry accepted as ${action.payload.guess.toUpperCase()}. Revealing feedback.`,
         };
       }
@@ -164,8 +218,18 @@ export function reducer(state: AppState, action: Action): AppState {
         currentGuess: "",
         message: "Revealing feedback…",
         errorScope: null,
+        timerActive:
+          action.payload.timer?.state === "completed"
+            ? null
+            : state.timerActive,
+        pendingTimer:
+          action.payload.timer?.state === "activated"
+            ? action.payload.timer
+            : null,
         announcement: "",
       };
+    case "TIMEOUT_SUCCESS":
+      return timeoutRevealState(state, action.payload);
     case "REVERSE_COMPLETE":
       if (!state.reverseTransition) return state;
       return {
@@ -183,6 +247,9 @@ export function reducer(state: AppState, action: Action): AppState {
           ...state,
           phase: "won",
           message: "",
+          timerActive: null,
+          pendingTimer: null,
+          blackoutCutoffAttempt: null,
         };
       }
       if (latest.status === "lost") {
@@ -190,6 +257,19 @@ export function reducer(state: AppState, action: Action): AppState {
           ...state,
           phase: "lost",
           message: "",
+          timerActive: null,
+          pendingTimer: null,
+          blackoutCutoffAttempt: null,
+        };
+      }
+      if (!isTimedOut(latest) && latest.blackout?.state === "activated") {
+        return {
+          ...state,
+          phase: "blackoutClosing",
+          message: "",
+          reverseEntryActive: false,
+          timerActive: null,
+          pendingTimer: null,
         };
       }
       return {
@@ -197,11 +277,35 @@ export function reducer(state: AppState, action: Action): AppState {
         phase: "ready",
         message: "",
         reverseEntryActive:
-          latest.reverseEntry?.state === "activated"
+          !isTimedOut(latest) && latest.reverseEntry?.state === "activated"
             ? true
             : state.reverseEntryActive,
+        timerActive: state.pendingTimer,
+        pendingTimer: null,
       };
     }
+    case "BLACKOUT_COVERED": {
+      const latest = state.guesses.at(-1);
+      if (state.phase !== "blackoutClosing" || !latest || isTimedOut(latest)) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: "blackoutOpening",
+        blackoutCutoffAttempt: latest.attempt,
+        announcement: "Blackout. Previous feedback has been erased.",
+      };
+    }
+    case "BLACKOUT_COMPLETE":
+      if (state.phase !== "blackoutOpening") return state;
+      return {
+        ...state,
+        phase: "ready",
+        message: "",
+        reverseEntryActive: false,
+        timerActive: null,
+        pendingTimer: null,
+      };
     case "FAILURE":
       if (action.scope === "guess" && action.recoverable !== true) {
         return {

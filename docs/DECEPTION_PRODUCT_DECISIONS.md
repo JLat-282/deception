@@ -248,6 +248,13 @@ the daily date is not enough to reproduce player-specific modifier events.
 
 ## Layer 5: Difficulty and punishments
 
+The authoritative preset and Daily Descent direction is
+[`DIFFICULTY_AND_DAILY_DESCENT_DESIGN.md`](DIFFICULTY_AND_DAILY_DESCENT_DESIGN.md).
+It supersedes the former global assumptions about punishment caps, Blackout in the
+easiest game, modifier combinations, and Daily schedule sharing. The individual
+mechanics below remain authoritative and describe the `doubt-2@1` baseline unless a
+preset explicitly overrides their frequency or compatibility.
+
 ### Difficulty model
 
 - Expose named difficulty presets to players.
@@ -256,7 +263,8 @@ the daily date is not enough to reproduce player-specific modifier events.
   - Time pressure.
   - Modifier selection and intensity.
 - Vocabulary difficulty and guess count are not initial difficulty axes.
-- Only one modifier may be active at a time.
+- Doubt I and `doubt-2@1` allow only one active modifier at a time. Higher presets
+  use an explicit compatibility allowlist.
 - Modifiers are not announced before the game.
 - The player learns about a modifier when it activates.
 
@@ -287,17 +295,71 @@ the daily date is not enough to reproduce player-specific modifier events.
 - This implementation is specific to Reverse Entry. It does not introduce a
   generalized punishment engine.
 
+### Second playable punishment: Guess Timer
+
+`LOCKED`
+
+- Each game has a 45% chance to receive one secretly scheduled Guess Timer.
+- When a timer is scheduled, it is assigned to one attempt from two through six
+  before play begins. The schedule is persisted and never exposed early.
+- Scheduled timers are 30 seconds 70% of the time and 10 seconds 30% of the
+  time. Across all games, this produces 31.5% with a 30-second timer, 13.5%
+  with a 10-second timer, and 55% with no timer.
+- The timer activates after the preceding accepted row resolves.
+- The server owns the deadline. Slowing the browser, changing tabs, or
+  submitting after the visible countdown reaches zero cannot bypass it.
+- Invalid and incomplete words do not stop, reset, or consume the timer.
+- Expiration consumes the scheduled guess. The board records a row labeled
+  `Time expired` without inventing letters or feedback.
+- Expiring on the sixth attempt ends the game as a loss.
+- In the current base game, a timer takes priority when it would overlap with
+  Reverse Entry. Reverse Entry does not activate for that same guess.
+- Timer and Reverse Entry may both occur in one base game, but they do not
+  operate on the same guess.
+- The guide cannot be opened while a timer is active, and the timer never
+  pauses.
+- Timer audio is not part of this first implementation.
+- This implementation remains specific to Guess Timer. It does not introduce a
+  generalized punishment engine.
+
+### Third playable punishment: Blackout
+
+`LOCKED`
+
+- Each game has a 10% chance to receive one secretly scheduled Blackout.
+- Once selected, Blackout is assigned to accepted attempt three, four, or five
+  with an equal one-third chance for each.
+- A correct answer cancels Blackout. Invalid guesses never advance or trigger
+  it.
+- Blackout begins immediately after the selected row finishes revealing. The
+  curtain closes in 160ms, remains fully covered for 120ms, and reopens in 220ms,
+  for a 500ms transition.
+- While covered, all accumulated rows lose their color feedback and the
+  keyboard resets to neutral. Submitted words remain visible on dark tiles.
+- Future guesses reveal normally and rebuild keyboard knowledge from that point
+  forward.
+- When the game ends, the original displayed feedback returns so the player can
+  review the board and the lie report.
+- Multiple punishments may occur in the same base game. Guess Timer and Reverse
+  Entry cannot affect the Blackout attempt or the immediately following
+  attempt. They remain eligible elsewhere.
+- Reduced motion replaces the moving curtains with a short fade to black and
+  back. Input remains locked throughout either transition.
+
 ### Failure consequences
 
-- Failing a guess timer normally consumes the current guess.
+- Failing a guess timer consumes the current guess.
 - Failing another modifier challenge may remove a piece of evidence.
-- Permanent evidence removal is not the default, but a specific higher preset may
-  allow it.
+- Blackout may remove accumulated feedback for the remainder of an active game,
+  but the evidence returns after the result.
 
 ### Modifier randomization
 
-- Daily players do not have to receive identical modifier events.
-- Modifier selection may depend on the game state and may include randomness.
+- Daily Descent shares its immutable schedulable blueprint and derivation seed.
+- Reactive events may differ because they are deterministic functions of each
+  player's actual guess history.
+- Identical Daily guess histories produce identical reactive outcomes.
+- Practice and future Infinite games generate a new blueprint per game.
 - Shared challenge links use the full challenge seed when exact reproduction is
   required.
 
@@ -552,7 +614,9 @@ Circle back to this
 5. Decide which accessible equivalents preserve access to higher difficulty levels.
 Come to this later, try to maintain high accessibility standards while not making the game easier for them without disqualification from leaderboards
 6. Build the first modifier compatibility matrix.
-Come to this later
+`PARTIALLY RESOLVED`: Doubt I and Doubt II prohibit same-attempt combinations.
+Higher-level allowlists and cooldowns remain part of the numeric tuning gate in the
+difficulty design.
 
 ### Deferred from version one
 

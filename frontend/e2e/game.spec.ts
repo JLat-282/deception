@@ -1,6 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("deception-guide-seen-v1", "true");
+  });
+});
+
 test("practice can be solved with the physical keyboard", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Play Practice" }).click();
@@ -61,16 +67,16 @@ test("an activated lie is audited after the game", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("How Deception Works is keyboard accessible", async ({ page }) => {
+test("the Deception Guide is keyboard accessible", async ({ page }) => {
   await page.goto("/");
   const trigger = page.getByRole("button", {
-    name: "How Deception Works",
+    name: "Open Deception Guide",
   });
   await trigger.focus();
   await trigger.press("Enter");
 
   await expect(
-    page.getByRole("heading", { name: "How Deception Works" }),
+    page.getByRole("heading", { name: "Deception Guide" }),
   ).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).analyze();
   const serious = accessibility.violations.filter((violation) =>
@@ -106,9 +112,7 @@ test("Reverse Entry decodes and reveals the next accepted guess", async ({
 
   await page.keyboard.type("fight");
   await page.keyboard.press("Enter");
-  await expect(
-    page.getByText("Type your next guess backwards"),
-  ).toBeVisible();
+  await expect(page.getByText("Type your next guess backwards")).toBeVisible();
 
   await page.keyboard.type("enarc");
   await page.keyboard.press("Enter");
@@ -209,12 +213,12 @@ test("focus order and reduced-motion reveal remain usable", async ({
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await expect(
-    page.getByRole("button", { name: "How Deception Works" }),
+    page.getByRole("button", { name: "Open Deception Guide" }),
   ).toBeVisible();
 
   await page.keyboard.press("Tab");
   await expect(
-    page.getByRole("button", { name: "How Deception Works" }),
+    page.getByRole("button", { name: "Open Deception Guide" }),
   ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Play Daily" })).toBeFocused();
@@ -241,4 +245,81 @@ test("focus order and reduced-motion reveal remain usable", async ({
   await expect(
     page.getByRole("heading", { name: "Word found." }),
   ).toBeVisible();
+});
+
+test("Blackout closes after row reveal and erases accumulated feedback", async ({
+  page,
+}) => {
+  let attempt = 0;
+  await page.route("**/api/bootstrap", (route) =>
+    route.fulfill({
+      json: {
+        config: { wordLength: 5, maxGuesses: 6 },
+        daily: {
+          puzzleKey: "2026-07-28",
+          availability: "available",
+          resetAt: "2026-07-29T03:00:00Z",
+        },
+      },
+    }),
+  );
+  await page.route("**/api/games", (route) =>
+    route.fulfill({
+      json: {
+        gameId: "blackout-game",
+        mode: "practice",
+        config: { wordLength: 5, maxGuesses: 6 },
+      },
+    }),
+  );
+  await page.route("**/api/games/blackout-game/guesses", (route) => {
+    attempt += 1;
+    const guesses = ["slate", "fight", "picky"];
+    route.fulfill({
+      json: {
+        guess: guesses[attempt - 1],
+        feedback: attempt === 1 ? "BBGBG" : "BBBBB",
+        attempt,
+        status: "playing",
+        ...(attempt === 3 ? { blackout: { state: "activated" } } : {}),
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Play Practice" }).click();
+  for (const [index, guess] of ["slate", "fight", "picky"].entries()) {
+    await page.keyboard.type(guess);
+    await page.keyboard.press("Enter");
+    if (index < 2) {
+      await expect(page.getByText(`${index + 1} of 6 guesses`)).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Enter", exact: true }),
+      ).toBeEnabled();
+    }
+  }
+
+  await expect(page.locator(".blackout-curtain")).toBeVisible();
+  if (process.env.DECEPTION_CAPTURE_BLACKOUT === "true") {
+    await page.screenshot({
+      path: "../output/playwright/blackout-curtain.png",
+      fullPage: true,
+    });
+  }
+  await expect(page.locator(".tile--blackout")).toHaveCount(15);
+  await expect(page.locator(".blackout-curtain")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Enter" })).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "A", exact: true }),
+  ).not.toHaveClass(/key--[gyb]/);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+  if (process.env.DECEPTION_CAPTURE_BLACKOUT === "true") {
+    await page.screenshot({
+      path: "../output/playwright/blackout-result.png",
+      fullPage: true,
+    });
+  }
 });

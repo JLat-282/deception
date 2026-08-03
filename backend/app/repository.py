@@ -10,7 +10,7 @@ from typing import Iterator, Literal
 
 GameMode = Literal["daily", "practice"]
 GameStatus = Literal["playing", "won", "lost"]
-CURRENT_RULES_VERSION = 4
+CURRENT_RULES_VERSION = 6
 CURRENT_DECEPTION_STRATEGY_VERSION = 3
 
 
@@ -58,6 +58,28 @@ class ReverseEntryState:
     trigger_attempt: int | None
     trigger_reason: Literal["lowInformation", "chance"] | None
     consumed_attempt: int | None
+
+
+@dataclass(frozen=True)
+class GuessTimerState:
+    game_id: str
+    seed: str
+    status: Literal[
+        "skipped", "scheduled", "active", "completed", "expired"
+    ]
+    scheduled_attempt: int | None
+    duration_seconds: int | None
+    starts_at: datetime | None
+    deadline_at: datetime | None
+    resolved_attempt: int | None
+
+
+@dataclass(frozen=True)
+class BlackoutState:
+    game_id: str
+    seed: str
+    status: Literal["skipped", "scheduled", "activated"]
+    scheduled_attempt: int | None
 
 
 SCHEMA = """
@@ -165,6 +187,90 @@ CREATE TABLE IF NOT EXISTS reverse_entry_states (
 );
 """
 
+MIGRATION_4 = """
+CREATE TABLE IF NOT EXISTS guess_timer_states (
+    game_id TEXT PRIMARY KEY REFERENCES games(id),
+    seed TEXT NOT NULL,
+    status TEXT NOT NULL
+        CHECK (
+            status IN (
+                'skipped', 'scheduled', 'active', 'completed', 'expired'
+            )
+        ),
+    scheduled_attempt INTEGER CHECK (scheduled_attempt BETWEEN 2 AND 6),
+    duration_seconds INTEGER CHECK (duration_seconds IN (10, 30)),
+    starts_at TEXT,
+    deadline_at TEXT,
+    resolved_attempt INTEGER CHECK (resolved_attempt BETWEEN 2 AND 6),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (
+            status = 'skipped'
+            AND scheduled_attempt IS NULL
+            AND duration_seconds IS NULL
+            AND starts_at IS NULL
+            AND deadline_at IS NULL
+            AND resolved_attempt IS NULL
+        )
+        OR (
+            status = 'scheduled'
+            AND scheduled_attempt IS NOT NULL
+            AND duration_seconds IS NOT NULL
+            AND starts_at IS NULL
+            AND deadline_at IS NULL
+            AND resolved_attempt IS NULL
+        )
+        OR (
+            status = 'active'
+            AND scheduled_attempt IS NOT NULL
+            AND duration_seconds IS NOT NULL
+            AND starts_at IS NOT NULL
+            AND deadline_at IS NOT NULL
+            AND resolved_attempt IS NULL
+        )
+        OR (
+            status IN ('completed', 'expired')
+            AND scheduled_attempt IS NOT NULL
+            AND duration_seconds IS NOT NULL
+            AND starts_at IS NOT NULL
+            AND deadline_at IS NOT NULL
+            AND resolved_attempt = scheduled_attempt
+        )
+    )
+);
+"""
+
+MIGRATION_5 = """
+CREATE TABLE IF NOT EXISTS blackout_states (
+    game_id TEXT PRIMARY KEY REFERENCES games(id),
+    seed TEXT NOT NULL,
+    status TEXT NOT NULL
+        CHECK (status IN ('skipped', 'scheduled', 'activated')),
+    scheduled_attempt INTEGER CHECK (scheduled_attempt BETWEEN 3 AND 5),
+    activated_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (
+            status = 'skipped'
+            AND scheduled_attempt IS NULL
+            AND activated_at IS NULL
+        )
+        OR (
+            status = 'scheduled'
+            AND scheduled_attempt IS NOT NULL
+            AND activated_at IS NULL
+        )
+        OR (
+            status = 'activated'
+            AND scheduled_attempt IS NOT NULL
+            AND activated_at IS NOT NULL
+        )
+    )
+);
+"""
+
 
 class Repository:
     def __init__(self, db_path: Path) -> None:
@@ -225,6 +331,12 @@ class Repository:
             if version < 3:
                 self._execute_script(connection, MIGRATION_3)
                 connection.execute("PRAGMA user_version = 3")
+            if version < 4:
+                self._execute_script(connection, MIGRATION_4)
+                connection.execute("PRAGMA user_version = 4")
+            if version < 5:
+                self._execute_script(connection, MIGRATION_5)
+                connection.execute("PRAGMA user_version = 5")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -607,6 +719,219 @@ class Repository:
             WHERE game_id = ? AND status = 'active'
             """,
             (consumed_attempt, updated_at.isoformat(), game_id),
+        )
+
+    @staticmethod
+    def create_guess_timer_state(
+        connection: sqlite3.Connection,
+        game_id: str,
+        seed: str,
+        scheduled_attempt: int | None,
+        duration_seconds: int | None,
+        created_at: datetime,
+    ) -> GuessTimerState:
+        if (scheduled_attempt is None) != (duration_seconds is None):
+            raise ValueError(
+                "Timer attempt and duration must either both be set or omitted."
+            )
+        timestamp = created_at.isoformat()
+        status = "skipped" if scheduled_attempt is None else "scheduled"
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO guess_timer_states(
+                game_id, seed, status, scheduled_attempt, duration_seconds,
+                starts_at, deadline_at, resolved_attempt, created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+            """,
+            (
+                game_id,
+                seed,
+                status,
+                scheduled_attempt,
+                duration_seconds,
+                timestamp,
+                timestamp,
+            ),
+        )
+        state = Repository.get_guess_timer_state(connection, game_id)
+        if state is None:
+            raise sqlite3.IntegrityError(
+                "Guess Timer state could not be created."
+            )
+        return state
+
+    @staticmethod
+    def get_guess_timer_state(
+        connection: sqlite3.Connection, game_id: str
+    ) -> GuessTimerState | None:
+        row = connection.execute(
+            """
+            SELECT game_id, seed, status, scheduled_attempt,
+                   duration_seconds, starts_at, deadline_at,
+                   resolved_attempt
+            FROM guess_timer_states
+            WHERE game_id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return GuessTimerState(
+            game_id=row["game_id"],
+            seed=row["seed"],
+            status=row["status"],
+            scheduled_attempt=row["scheduled_attempt"],
+            duration_seconds=row["duration_seconds"],
+            starts_at=(
+                datetime.fromisoformat(row["starts_at"])
+                if row["starts_at"]
+                else None
+            ),
+            deadline_at=(
+                datetime.fromisoformat(row["deadline_at"])
+                if row["deadline_at"]
+                else None
+            ),
+            resolved_attempt=row["resolved_attempt"],
+        )
+
+    @staticmethod
+    def activate_guess_timer(
+        connection: sqlite3.Connection,
+        game_id: str,
+        starts_at: datetime,
+        deadline_at: datetime,
+        updated_at: datetime,
+    ) -> GuessTimerState:
+        connection.execute(
+            """
+            UPDATE guess_timer_states
+            SET status = 'active', starts_at = ?, deadline_at = ?,
+                updated_at = ?
+            WHERE game_id = ? AND status = 'scheduled'
+            """,
+            (
+                starts_at.isoformat(),
+                deadline_at.isoformat(),
+                updated_at.isoformat(),
+                game_id,
+            ),
+        )
+        state = Repository.get_guess_timer_state(connection, game_id)
+        if state is None:
+            raise sqlite3.IntegrityError(
+                "Guess Timer state could not be activated."
+            )
+        return state
+
+    @staticmethod
+    def resolve_guess_timer(
+        connection: sqlite3.Connection,
+        game_id: str,
+        outcome: Literal["completed", "expired"],
+        resolved_attempt: int,
+        updated_at: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE guess_timer_states
+            SET status = ?, resolved_attempt = ?, updated_at = ?
+            WHERE game_id = ? AND status = 'active'
+            """,
+            (
+                outcome,
+                resolved_attempt,
+                updated_at.isoformat(),
+                game_id,
+            ),
+        )
+
+    @staticmethod
+    def create_blackout_state(
+        connection: sqlite3.Connection,
+        game_id: str,
+        seed: str,
+        scheduled_attempt: int | None,
+        created_at: datetime,
+    ) -> BlackoutState:
+        if scheduled_attempt is not None and scheduled_attempt not in range(3, 6):
+            raise ValueError("Blackout must be scheduled for attempt 3, 4, or 5.")
+        timestamp = created_at.isoformat()
+        status = "skipped" if scheduled_attempt is None else "scheduled"
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO blackout_states(
+                game_id, seed, status, scheduled_attempt, activated_at,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                game_id,
+                seed,
+                status,
+                scheduled_attempt,
+                timestamp,
+                timestamp,
+            ),
+        )
+        state = Repository.get_blackout_state(connection, game_id)
+        if state is None:
+            raise sqlite3.IntegrityError("Blackout state could not be created.")
+        return state
+
+    @staticmethod
+    def get_blackout_state(
+        connection: sqlite3.Connection, game_id: str
+    ) -> BlackoutState | None:
+        row = connection.execute(
+            """
+            SELECT game_id, seed, status, scheduled_attempt
+            FROM blackout_states
+            WHERE game_id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return BlackoutState(
+            game_id=row["game_id"],
+            seed=row["seed"],
+            status=row["status"],
+            scheduled_attempt=row["scheduled_attempt"],
+        )
+
+    @staticmethod
+    def activate_blackout(
+        connection: sqlite3.Connection,
+        game_id: str,
+        activated_at: datetime,
+    ) -> None:
+        timestamp = activated_at.isoformat()
+        connection.execute(
+            """
+            UPDATE blackout_states
+            SET status = 'activated', activated_at = ?, updated_at = ?
+            WHERE game_id = ? AND status = 'scheduled'
+            """,
+            (timestamp, timestamp, game_id),
+        )
+
+    @staticmethod
+    def record_timeout(
+        connection: sqlite3.Connection,
+        game_id: str,
+        attempt: int,
+        status: GameStatus,
+        created_at: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE games
+            SET status = ?, guess_count = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, attempt, created_at.isoformat(), game_id),
         )
 
     @staticmethod

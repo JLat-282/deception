@@ -15,14 +15,15 @@ from .engine import TruthEngine, load_word_list
 from .errors import DomainError
 from .repository import Repository
 from .schemas import (
+    AttemptResponse,
     BootstrapResponse,
     ErrorBody,
     ErrorResponse,
     GuessRequest,
-    GuessResponse,
     HealthResponse,
     StartGameRequest,
     StartGameResponse,
+    TimedOutResponse,
 )
 from .service import GameService, NowProvider, SeedProvider
 
@@ -56,7 +57,7 @@ def create_app(
 
     app = FastAPI(
         title="Deception API",
-        version="0.3.0",
+        version="0.4.0",
     )
     app.state.service = service
     app.state.settings = active_settings
@@ -146,7 +147,7 @@ def create_app(
 
     @app.post(
         "/api/games/{game_id}/guesses",
-        response_model=GuessResponse,
+        response_model=AttemptResponse,
         response_model_by_alias=True,
         response_model_exclude_none=True,
     )
@@ -155,9 +156,24 @@ def create_app(
         payload: GuessRequest,
         request: Request,
         response: Response,
-    ) -> GuessResponse:
+    ) -> AttemptResponse:
         return service.submit_guess(
             device_id_for(request, response), game_id, payload.guess
+        )
+
+    @app.post(
+        "/api/games/{game_id}/timer/expire",
+        response_model=TimedOutResponse,
+        response_model_by_alias=True,
+        response_model_exclude_none=True,
+    )
+    def expire_timer(
+        game_id: str,
+        request: Request,
+        response: Response,
+    ) -> TimedOutResponse:
+        return service.expire_timer(
+            device_id_for(request, response), game_id
         )
 
     @app.get(

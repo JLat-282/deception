@@ -65,20 +65,86 @@ def _optional_lie_rows(raw_value: str | None) -> tuple[int, ...] | None:
     return tuple(sorted(rows))
 
 
-def _optional_probability(raw_value: str | None) -> float | None:
+def _optional_probability(
+    raw_value: str | None, environment_name: str
+) -> float | None:
     if not raw_value:
         return None
     try:
         probability = float(raw_value)
     except ValueError as error:
         raise ValueError(
-            "DECEPTION_FIXED_REVERSE_ENTRY_ROLL must be between 0 and 1."
+            f"{environment_name} must be between 0 and 1."
         ) from error
     if not 0 <= probability <= 1:
         raise ValueError(
-            "DECEPTION_FIXED_REVERSE_ENTRY_ROLL must be between 0 and 1."
+            f"{environment_name} must be between 0 and 1."
         )
     return probability
+
+
+def _optional_timer_attempt(raw_value: str | None) -> int | None:
+    if not raw_value:
+        return None
+    try:
+        attempt = int(raw_value)
+    except ValueError as error:
+        raise ValueError(
+            "DECEPTION_FIXED_TIMER_ATTEMPT must be an integer from 2 through 6."
+        ) from error
+    if attempt not in range(2, 7):
+        raise ValueError(
+            "DECEPTION_FIXED_TIMER_ATTEMPT must be an integer from 2 through 6."
+        )
+    return attempt
+
+
+def _optional_blackout_attempt(raw_value: str | None) -> int | None:
+    if not raw_value:
+        return None
+    try:
+        attempt = int(raw_value)
+    except ValueError as error:
+        raise ValueError(
+            "DECEPTION_FIXED_BLACKOUT_ATTEMPT must be 3, 4, or 5."
+        ) from error
+    if attempt not in range(3, 6):
+        raise ValueError(
+            "DECEPTION_FIXED_BLACKOUT_ATTEMPT must be 3, 4, or 5."
+        )
+    return attempt
+
+
+def _optional_timer_duration(raw_value: str | None) -> int | None:
+    if not raw_value:
+        return None
+    try:
+        duration = int(raw_value)
+    except ValueError as error:
+        raise ValueError(
+            "DECEPTION_FIXED_TIMER_DURATION must be either 10 or 30."
+        ) from error
+    if duration not in {10, 30}:
+        raise ValueError(
+            "DECEPTION_FIXED_TIMER_DURATION must be either 10 or 30."
+        )
+    return duration
+
+
+def _optional_decision_budget(raw_value: str | None) -> int | None:
+    if not raw_value:
+        return None
+    try:
+        budget = int(raw_value)
+    except ValueError as error:
+        raise ValueError(
+            "DECEPTION_DECISION_BUDGET_MS must be between 1 and 5000."
+        ) from error
+    if budget not in range(1, 5_001):
+        raise ValueError(
+            "DECEPTION_DECISION_BUDGET_MS must be between 1 and 5000."
+        )
+    return budget
 
 
 @dataclass(frozen=True)
@@ -96,6 +162,14 @@ class Settings:
     fixed_session_seed: str | None = None
     reverse_entry_enabled: bool = False
     fixed_reverse_entry_roll: float | None = None
+    guess_timer_enabled: bool = False
+    fixed_timer_roll: float | None = None
+    fixed_timer_duration: int | None = None
+    fixed_timer_attempt: int | None = None
+    blackout_enabled: bool = False
+    fixed_blackout_roll: float | None = None
+    fixed_blackout_attempt: int | None = None
+    deception_decision_budget_ms: int = 100
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -129,6 +203,38 @@ class Settings:
             ).lower()
             in {"1", "true", "yes"},
             fixed_reverse_entry_roll=_optional_probability(
-                os.getenv("DECEPTION_FIXED_REVERSE_ENTRY_ROLL")
+                os.getenv("DECEPTION_FIXED_REVERSE_ENTRY_ROLL"),
+                "DECEPTION_FIXED_REVERSE_ENTRY_ROLL",
+            ),
+            guess_timer_enabled=os.getenv(
+                "DECEPTION_GUESS_TIMER_ENABLED", "true"
+            ).lower()
+            in {"1", "true", "yes"},
+            fixed_timer_roll=_optional_probability(
+                os.getenv("DECEPTION_FIXED_TIMER_ROLL"),
+                "DECEPTION_FIXED_TIMER_ROLL",
+            ),
+            fixed_timer_duration=_optional_timer_duration(
+                os.getenv("DECEPTION_FIXED_TIMER_DURATION")
+            ),
+            fixed_timer_attempt=_optional_timer_attempt(
+                os.getenv("DECEPTION_FIXED_TIMER_ATTEMPT")
+            ),
+            blackout_enabled=os.getenv(
+                "DECEPTION_BLACKOUT_ENABLED", "true"
+            ).lower()
+            in {"1", "true", "yes"},
+            fixed_blackout_roll=_optional_probability(
+                os.getenv("DECEPTION_FIXED_BLACKOUT_ROLL"),
+                "DECEPTION_FIXED_BLACKOUT_ROLL",
+            ),
+            fixed_blackout_attempt=_optional_blackout_attempt(
+                os.getenv("DECEPTION_FIXED_BLACKOUT_ATTEMPT")
+            ),
+            deception_decision_budget_ms=(
+                _optional_decision_budget(
+                    os.getenv("DECEPTION_DECISION_BUDGET_MS")
+                )
+                or 100
             ),
         )
