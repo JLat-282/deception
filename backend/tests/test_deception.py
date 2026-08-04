@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from time import sleep
+from time import perf_counter, sleep
 
 from backend.app.deception import DeceptionEngine, VisibleGuess
 from backend.app.engine import TruthEngine, load_word_list
@@ -103,9 +103,65 @@ def test_decision_budget_falls_back_to_truthful_feedback() -> None:
 
     assert decision.feedback == truth
     assert not decision.activated
+    assert decision.reason == "deadline_expired"
 
 
-def test_slow_planner_falls_back_before_exceeding_budget(monkeypatch) -> None:
+def test_deadline_uses_a_plausible_candidate_already_found(monkeypatch) -> None:
+    truth_engine = TruthEngine(
+        valid_guesses=("outre", "store", "crane", "stare"),
+        answers=("outre", "store", "crane"),
+    )
+    deception = DeceptionEngine(truth_engine)
+    checks = iter((False, False, True))
+    monkeypatch.setattr(
+        deception,
+        "_budget_expired",
+        lambda _deadline: next(checks, True),
+    )
+    truth = truth_engine.evaluate("stare", "store")
+
+    decision = deception.choose_feedback(
+        guess="stare",
+        real_answer="store",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="partial-candidate",
+        max_false_tiles=2,
+        time_budget_ms=100,
+    )
+
+    assert truth == "GGBGG"
+    assert decision.feedback == "BYBGG"
+    assert decision.tile_indexes == (0, 1)
+    assert decision.reason == "activated"
+
+
+def test_stare_store_first_row_regression_uses_scheduled_lie() -> None:
+    truth_engine = full_engine()
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("stare", "store")
+
+    decision = deception.choose_feedback(
+        guess="stare",
+        real_answer="store",
+        truth_feedback=truth,
+        prior_history=(),
+        seed=(
+            "67013aa86480b43c14c67a2bddb4e970"
+            "14af1daeb59fc219c3834272ce0a879e"
+        ),
+        allow_constraint_fallback=True,
+        max_false_tiles=2,
+        time_budget_ms=100,
+    )
+
+    assert truth == "GGBGG"
+    assert decision.feedback == "BYBGG"
+    assert decision.tile_indexes == (0, 1)
+    assert decision.reason == "activated"
+
+
+def test_slow_planner_uses_candidate_found_before_budget(monkeypatch) -> None:
     truth_engine = full_engine()
     original_evaluate = truth_engine.evaluate
 
@@ -117,6 +173,7 @@ def test_slow_planner_falls_back_before_exceeding_budget(monkeypatch) -> None:
     deception = DeceptionEngine(truth_engine)
     truth = original_evaluate("slate", "crane")
 
+    started_at = perf_counter()
     decision = deception.choose_feedback(
         guess="slate",
         real_answer="crane",
@@ -125,9 +182,12 @@ def test_slow_planner_falls_back_before_exceeding_budget(monkeypatch) -> None:
         seed="slow-budget",
         time_budget_ms=5,
     )
+    elapsed = perf_counter() - started_at
 
-    assert decision.feedback == truth
-    assert not decision.activated
+    assert decision.feedback != truth
+    assert decision.activated
+    assert decision.reason == "activated"
+    assert elapsed < 0.1
 
 
 def test_truth_can_be_concealed() -> None:
@@ -222,6 +282,7 @@ def test_legacy_strategy_can_keep_the_strict_truthful_fallback() -> None:
 
     assert decision.feedback == truth
     assert decision.tile_index is None
+    assert decision.reason == "strategy_restricted"
 
 
 def test_picky_can_lie_after_stare_and_cloud_against_gnash() -> None:
@@ -272,6 +333,7 @@ def test_constraint_backed_lie_does_not_reuse_a_previously_guessed_letter(
 
     assert decision.feedback == truth
     assert decision.tile_index is None
+    assert decision.reason == "no_candidate"
 
 
 def test_constraint_backed_yellow_requires_an_available_other_position(

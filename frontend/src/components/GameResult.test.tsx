@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GameResult } from "./GameResult";
 
 describe("GameResult", () => {
-  it("offers Practice rather than replaying a finished Daily", () => {
+  it("offers Infinite rather than replaying a failed Daily Descent", () => {
     render(
       <GameResult
         mode="daily"
@@ -20,13 +20,14 @@ describe("GameResult", () => {
           ],
         }}
         onClose={vi.fn()}
-        onPractice={vi.fn()}
+        onInfinite={vi.fn()}
+        onDescend={vi.fn()}
         onModes={vi.fn()}
       />,
     );
 
     expect(
-      screen.getByRole("button", { name: "Play Practice" }),
+      screen.getByRole("button", { name: "Play Infinite" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Play Again" }),
@@ -39,6 +40,28 @@ describe("GameResult", () => {
     ).toBeInTheDocument();
   });
 
+  it("continues a won Daily stage into the next descent checkpoint", () => {
+    const onDescend = vi.fn();
+    render(
+      <GameResult
+        mode="daily"
+        status="won"
+        answer="crane"
+        attempt={3}
+        dailyStage={2}
+        onClose={vi.fn()}
+        onInfinite={vi.fn()}
+        onDescend={onDescend}
+        onModes={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Descend to Doubt III" }),
+    );
+    expect(onDescend).toHaveBeenCalledOnce();
+  });
+
   it("closes with Escape", () => {
     const onClose = vi.fn();
     render(
@@ -48,7 +71,8 @@ describe("GameResult", () => {
         answer="crane"
         attempt={2}
         onClose={onClose}
-        onPractice={vi.fn()}
+        onInfinite={vi.fn()}
+        onDescend={vi.fn()}
         onModes={vi.fn()}
       />,
     );
@@ -87,7 +111,8 @@ describe("GameResult", () => {
           ],
         }}
         onClose={vi.fn()}
-        onPractice={vi.fn()}
+        onInfinite={vi.fn()}
+        onDescend={vi.fn()}
         onModes={vi.fn()}
       />,
     );
@@ -129,7 +154,8 @@ describe("GameResult", () => {
           ],
         }}
         onClose={vi.fn()}
-        onPractice={vi.fn()}
+        onInfinite={vi.fn()}
+        onDescend={vi.fn()}
         onModes={vi.fn()}
       />,
     );

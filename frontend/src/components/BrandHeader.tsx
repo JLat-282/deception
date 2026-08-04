@@ -66,10 +66,10 @@ export function BrandHeader({
       <div className="game-header-actions">
         <p className={`mode-name mode-name--${mode}`}>
           {mode === "daily"
-            ? "Daily"
+            ? `Daily Descent${presetName ? ` · ${presetName}` : ""}`
             : presetName
-              ? `Practice · ${presetName}`
-              : "Practice"}
+              ? `Infinite · ${presetName}`
+              : "Infinite"}
         </p>
         <HelpButton onHelp={onHelp} disabled={helpDisabled} />
       </div>

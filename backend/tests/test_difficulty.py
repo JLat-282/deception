@@ -33,6 +33,12 @@ def test_preset_registry_exposes_all_four_versioned_levels() -> None:
         0.45,
         0.80,
     ]
+    assert [preset.intrusion_probability for preset in presets] == [
+        0.0,
+        0.10,
+        0.30,
+        1.0,
+    ]
     assert presets[3].timer_count_weights == ((1, 0.25), (2, 0.45), (3, 0.30))
     assert presets[3].two_tile_probability == 0.50
     assert presets[3].false_victory_probability == 0.05
@@ -48,7 +54,7 @@ def test_blueprint_is_deterministic_canonical_and_immutable() -> None:
     assert first.to_json() == second.to_json()
     encoded = json.loads(first.to_json())
     assert encoded["preset_key"] == "doubt-2@1"
-    assert encoded["schema_version"] == 3
+    assert encoded["schema_version"] == 4
     assert encoded["false_victory_enabled"] is False
     with pytest.raises(FrozenInstanceError):
         first.preset_key = "doubt-1@1"  # type: ignore[misc]
@@ -56,7 +62,7 @@ def test_blueprint_is_deterministic_canonical_and_immutable() -> None:
 
 def test_blueprint_decoder_rejects_unknown_schema_version() -> None:
     value = json.loads(build_blueprint("doubt-2@1", "stable-seed").to_json())
-    value["schema_version"] = 4
+    value["schema_version"] = 5
 
     with pytest.raises(ValueError, match="Unsupported game blueprint schema"):
         GameBlueprint.from_json(json.dumps(value))
@@ -69,8 +75,20 @@ def test_blueprint_decoder_migrates_schema_two_without_false_victory() -> None:
 
     restored = GameBlueprint.from_json(json.dumps(value))
 
-    assert restored.schema_version == 3
+    assert restored.schema_version == 4
     assert restored.false_victory_enabled is False
+    assert restored.intrusion_probability == 0.0
+
+
+def test_blueprint_decoder_migrates_schema_three_without_intrusion() -> None:
+    value = json.loads(build_blueprint("doubt-3@1", "legacy-seed").to_json())
+    value["schema_version"] = 3
+    value.pop("intrusion_probability")
+
+    restored = GameBlueprint.from_json(json.dumps(value))
+
+    assert restored.schema_version == 4
+    assert restored.intrusion_probability == 0.0
 
 
 def test_doubt_one_timer_owns_the_single_punishment_slot() -> None:

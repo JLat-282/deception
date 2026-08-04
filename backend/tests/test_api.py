@@ -9,14 +9,27 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from backend.app.config import DEFAULT_DATA_DIR, Settings
+from backend.app.deception import DeceptionDecision
 from backend.app.difficulty import BlueprintOverrides
 from backend.app.main import create_app
 
+DAILY_TOKEN = "daily-test-continuation-token-12345"
+
 
 def start_game(client: TestClient, mode: str = "practice") -> dict:
-    response = client.post("/api/games", json={"mode": mode})
+    payload = {"mode": mode}
+    if mode == "daily":
+        payload["continuationToken"] = DAILY_TOKEN
+    response = client.post("/api/games", json=payload)
     assert response.status_code == 200
     return response.json()
+
+
+def daily_guess(client: TestClient, game_id: str, guess: str):
+    return client.post(
+        f"/api/games/{game_id}/guesses",
+        json={"guess": guess, "continuationToken": DAILY_TOKEN},
+    )
 
 
 def test_doubt_three_executes_repeated_overlapping_events(
@@ -304,6 +317,63 @@ def test_deception_can_overlap_blackout_reverse_and_ten_second_timer(
     ) == timedelta(seconds=2)
 
 
+def test_intrusion_can_repeat_on_consecutive_eligible_guesses(
+    settings: Settings, clock, monkeypatch
+) -> None:
+    intrusion_settings = replace(
+        settings,
+        db_path=settings.db_path.with_name("intrusion.sqlite"),
+        fixed_lie_row=None,
+        fixed_lie_rows=None,
+        reverse_entry_enabled=False,
+        guess_timer_enabled=False,
+        blackout_enabled=False,
+    )
+    app = create_app(settings=intrusion_settings, now_provider=clock)
+    monkeypatch.setattr(
+        app.state.service,
+        "_blueprint_overrides",
+        lambda: BlueprintOverrides(
+            lie_attempts=(6,),
+            intrusion_probability=1.0,
+            timer_enabled=False,
+            reverse_enabled=False,
+            blackout_enabled=False,
+        ),
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/games",
+            json={"mode": "practice", "presetKey": "doubt-2@1"},
+        ).json()
+        game_id = started["gameId"]
+        first = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "slate"}
+        ).json()
+        second = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "fight"}
+        ).json()
+        third = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "mould"}
+        ).json()
+        winner = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "crane"}
+        ).json()
+
+    assert "intrusion" not in first
+    assert second["intrusion"]["state"] == "activated"
+    assert third["intrusion"]["state"] == "activated"
+    assert second["intrusion"]["placement"] in {
+        "upperLeft",
+        "upperRight",
+        "lowerLeft",
+        "lowerRight",
+    }
+    assert winner["status"] == "won"
+    assert "intrusion" not in winner
+
+
 def reverse_entry_settings(
     tmp_path: Path,
     *,
@@ -417,11 +487,24 @@ def test_bootstrap_sets_device_cookie_and_returns_contract(
     assert response.status_code == 200
     assert response.json() == {
         "config": {"wordLength": 5, "maxGuesses": 6},
-        "daily": {
-            "puzzleKey": "2026-07-28",
-            "availability": "available",
-            "resetAt": "2026-07-29T03:00:00Z",
-        },
+            "daily": {
+                "puzzleKey": "2026-07-28",
+                "availability": "available",
+                "resetAt": "2026-07-29T03:00:00Z",
+                "status": "unstarted",
+                "currentStage": 1,
+                "clearedStages": 0,
+                "currentPreset": {
+                    "presetKey": "doubt-1@1",
+                    "name": "Doubt I",
+                    "rank": 1,
+                    "pressure": "Low",
+                    "description": (
+                        "An approachable introduction to uncertain feedback."
+                    ),
+                    "available": True,
+                },
+            },
         "presets": [
             {
                 "presetKey": "doubt-1@1",
@@ -486,18 +569,26 @@ def test_practice_preset_is_selected_and_persisted(
     assert json.loads(blueprint_json)["preset_key"] == "doubt-1@1"
 
 
-def test_daily_defaults_to_doubt_two_and_unknown_presets_are_rejected(
+def test_daily_begins_at_doubt_one_and_rejects_manual_preset_selection(
     client: TestClient,
 ) -> None:
-    daily = client.post(
+    daily = start_game(client, "daily")
+    locked = client.post(
         "/api/games",
-        json={"mode": "daily", "presetKey": "doubt-1@1"},
+        json={
+            "mode": "daily",
+            "presetKey": "doubt-1@1",
+            "continuationToken": DAILY_TOKEN,
+        },
     )
     invalid = client.post(
         "/api/games",
         json={"mode": "practice", "presetKey": "unknown@1"},
     )
-    assert daily.json()["preset"]["presetKey"] == "doubt-2@1"
+    assert daily["preset"]["presetKey"] == "doubt-1@1"
+    assert daily["dailyStage"] == 1
+    assert locked.status_code == 400
+    assert locked.json()["error"]["code"] == "DAILY_PRESET_LOCKED"
     assert invalid.status_code == 400
     assert invalid.json()["error"]["code"] == "INVALID_PRESET"
 
@@ -607,14 +698,8 @@ def test_invalid_first_guess_does_not_consume_daily(
 ) -> None:
     game = start_game(client, "daily")
 
-    short = client.post(
-        f"/api/games/{game['gameId']}/guesses",
-        json={"guess": "cat"},
-    )
-    unknown = client.post(
-        f"/api/games/{game['gameId']}/guesses",
-        json={"guess": "zzzzz"},
-    )
+    short = daily_guess(client, game["gameId"], "cat")
+    unknown = daily_guess(client, game["gameId"], "zzzzz")
 
     assert short.status_code == 400
     assert short.json()["error"]["code"] == "INVALID_LENGTH"
@@ -630,30 +715,22 @@ def test_first_valid_daily_guess_consumes_attempt_and_blocks_restart(
 ) -> None:
     game = start_game(client, "daily")
 
-    guess = client.post(
-        f"/api/games/{game['gameId']}/guesses",
-        json={"guess": "slate"},
-    )
+    guess = daily_guess(client, game["gameId"], "slate")
 
     assert guess.status_code == 200
     assert client.get("/api/bootstrap").json()["daily"]["availability"] == "used"
-    blocked = client.post("/api/games", json={"mode": "daily"})
+    blocked = client.post(
+        "/api/games",
+        json={"mode": "daily", "continuationToken": DAILY_TOKEN},
+    )
     assert blocked.status_code == 409
-    assert blocked.json() == {
-        "error": {
-            "code": "DAILY_ALREADY_USED",
-            "message": "Today’s Daily attempt has already been used.",
-        }
-    }
+    assert blocked.json()["error"]["code"] == "DAILY_DESCENT_FINISHED"
 
 
 def test_daily_attempt_is_isolated_by_anonymous_device(app) -> None:
     with TestClient(app) as first, TestClient(app) as second:
         first_game = start_game(first, "daily")
-        first.post(
-            f"/api/games/{first_game['gameId']}/guesses",
-            json={"guess": "slate"},
-        )
+        daily_guess(first, first_game["gameId"], "slate")
 
         assert first.get("/api/bootstrap").json()["daily"]["availability"] == (
             "used"
@@ -666,16 +743,101 @@ def test_daily_attempt_is_isolated_by_anonymous_device(app) -> None:
 
 def test_new_reset_window_makes_daily_available_again(client, clock) -> None:
     game = start_game(client, "daily")
-    client.post(
-        f"/api/games/{game['gameId']}/guesses",
-        json={"guess": "slate"},
-    )
+    daily_guess(client, game["gameId"], "slate")
 
     clock.current = datetime(2026, 7, 29, 3, 0, tzinfo=UTC)
     bootstrap = client.get("/api/bootstrap").json()
 
     assert bootstrap["daily"]["puzzleKey"] == "2026-07-29"
     assert bootstrap["daily"]["availability"] == "available"
+
+
+def test_daily_descent_clears_four_unique_stages_in_order(
+    tmp_path: Path, clock
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "daily-descent.sqlite",
+        daily_seed="daily-descent",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=6,
+        fixed_session_seed="daily-descent-session",
+        reverse_entry_enabled=False,
+    )
+    app = create_app(settings=settings, now_provider=clock)
+    expected_presets = [
+        "doubt-1@1",
+        "doubt-2@1",
+        "doubt-3@1",
+        "deception@1",
+    ]
+    answers: list[str] = []
+
+    with TestClient(app) as client:
+        for stage_index, preset_key in enumerate(expected_presets, start=1):
+            game = start_game(client, "daily")
+            assert game["dailyStage"] == stage_index
+            assert game["preset"]["presetKey"] == preset_key
+            with sqlite3.connect(settings.db_path) as connection:
+                answer = connection.execute(
+                    "SELECT answer FROM games WHERE id = ?",
+                    (game["gameId"],),
+                ).fetchone()[0]
+            answers.append(answer)
+            result = daily_guess(client, game["gameId"], answer)
+            assert result.status_code == 200
+            assert result.json()["status"] == "won"
+            bootstrap = client.get("/api/bootstrap").json()["daily"]
+            expected_status = "completed" if stage_index == 4 else "checkpoint"
+            assert bootstrap["status"] == expected_status
+            assert bootstrap["clearedStages"] == stage_index
+
+    assert len(set(answers)) == 4
+
+
+def test_daily_descent_loss_blocks_later_stages(client: TestClient) -> None:
+    game = start_game(client, "daily")
+    for guess in ("slate", "fight", "mould", "berry", "shack", "dingo"):
+        result = daily_guess(client, game["gameId"], guess)
+
+    assert result.json()["status"] == "lost"
+    bootstrap = client.get("/api/bootstrap").json()["daily"]
+    assert bootstrap["status"] == "failed"
+    blocked = client.post(
+        "/api/games",
+        json={"mode": "daily", "continuationToken": DAILY_TOKEN},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "DAILY_DESCENT_FINISHED"
+
+
+def test_refresh_forfeits_an_active_daily_descent(client: TestClient) -> None:
+    game = start_game(client, "daily")
+    assert daily_guess(client, game["gameId"], "slate").status_code == 200
+
+    bootstrap = client.get("/api/bootstrap").json()["daily"]
+    resumed = daily_guess(client, game["gameId"], "fight")
+
+    assert bootstrap["status"] == "forfeited"
+    assert resumed.status_code == 409
+    assert resumed.json()["error"]["code"] == "DAILY_DESCENT_FINISHED"
+
+
+def test_daily_descent_rejects_a_competing_page_token(client: TestClient) -> None:
+    game = start_game(client, "daily")
+    assert daily_guess(client, game["gameId"], "slate").status_code == 200
+
+    competing = client.post(
+        f"/api/games/{game['gameId']}/guesses",
+        json={
+            "guess": "fight",
+            "continuationToken": "different-page-continuation-token-98765",
+        },
+    )
+
+    assert competing.status_code == 409
+    assert competing.json()["error"]["code"] == "CONTINUATION_MISMATCH"
 
 
 def test_practice_games_avoid_immediate_repeat(
@@ -717,9 +879,12 @@ def test_daily_answer_persists_across_application_restart(
         start_game(client, "daily")
 
     with sqlite3.connect(settings.db_path) as connection:
-        first_answer = connection.execute(
-            "SELECT answer FROM daily_puzzles WHERE puzzle_key = '2026-07-28'"
-        ).fetchone()[0]
+        first_answers = connection.execute(
+            """
+            SELECT answer FROM daily_descent_puzzles
+            WHERE puzzle_key = '2026-07-28' ORDER BY stage_index
+            """
+        ).fetchall()
 
     changed_seed = Settings(
         db_path=settings.db_path,
@@ -732,11 +897,16 @@ def test_daily_answer_persists_across_application_restart(
         start_game(client, "daily")
 
     with sqlite3.connect(settings.db_path) as connection:
-        second_answer = connection.execute(
-            "SELECT answer FROM daily_puzzles WHERE puzzle_key = '2026-07-28'"
-        ).fetchone()[0]
+        second_answers = connection.execute(
+            """
+            SELECT answer FROM daily_descent_puzzles
+            WHERE puzzle_key = '2026-07-28' ORDER BY stage_index
+            """
+        ).fetchall()
 
-    assert second_answer == first_answer
+    assert len(first_answers) == 4
+    assert len(set(first_answers)) == 4
+    assert second_answers == first_answers
 
 
 def test_activated_lie_is_secret_until_terminal_and_then_auditable(
@@ -764,6 +934,15 @@ def test_activated_lie_is_secret_until_terminal_and_then_auditable(
             json={"guess": "crane"},
         ).json()
 
+    with sqlite3.connect(settings.db_path) as connection:
+        recorded_reasons = connection.execute(
+            """
+            SELECT deception_reason FROM guesses
+            WHERE game_id = ? ORDER BY attempt
+            """,
+            (game["gameId"],),
+        ).fetchall()
+
     assert first == {
         "guess": "slate",
         "feedback": "BBGBY",
@@ -785,6 +964,7 @@ def test_activated_lie_is_secret_until_terminal_and_then_auditable(
             }
         ],
     }
+    assert recorded_reasons == [("activated",), ("not_scheduled",)]
 
 
 def test_constraint_backed_lie_activates_when_curated_decoys_are_exhausted(
@@ -833,6 +1013,49 @@ def test_constraint_backed_lie_activates_when_curated_decoys_are_exhausted(
             }],
         }
     ]
+
+
+def test_truthful_deadline_reason_is_persisted(
+    tmp_path: Path, clock, monkeypatch
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "deadline-reason.sqlite",
+        daily_seed="deadline-reason-daily",
+        answer_list_version="test-v1",
+        data_dir=DEFAULT_DATA_DIR,
+        fixed_answer="crane",
+        fixed_lie_row=1,
+        fixed_session_seed="deadline-reason-session",
+    )
+    app = create_app(settings=settings, now_provider=clock)
+
+    def deadline_decision(**kwargs) -> DeceptionDecision:
+        return DeceptionDecision(
+            feedback=kwargs["truth_feedback"],
+            reason="deadline_expired",
+        )
+
+    monkeypatch.setattr(
+        app.state.service.deception_engine,
+        "choose_feedback",
+        deadline_decision,
+    )
+
+    with TestClient(app) as client:
+        game = start_game(client)
+        response = client.post(
+            f"/api/games/{game['gameId']}/guesses",
+            json={"guess": "slate"},
+        )
+
+    with sqlite3.connect(settings.db_path) as connection:
+        reason = connection.execute(
+            "SELECT deception_reason FROM guesses WHERE game_id = ?",
+            (game["gameId"],),
+        ).fetchone()[0]
+
+    assert response.status_code == 200
+    assert reason == "deadline_expired"
 
 
 def test_two_scheduled_rows_can_activate_without_reusing_a_tile(
@@ -916,20 +1139,25 @@ def test_daily_schedule_is_shared_while_practice_schedules_are_per_game(
         start_game(second, "practice")
 
     with sqlite3.connect(settings.db_path) as connection:
-        daily_count = connection.execute(
+        daily_schedules = connection.execute(
             """
-            SELECT COUNT(*) FROM deception_schedules
-            WHERE daily_puzzle_key = '2026-07-28'
+            SELECT g.id, d.scheduled_attempt
+            FROM deception_schedules d
+            JOIN games g ON g.id = d.game_id
+            WHERE g.mode = 'daily'
+            ORDER BY g.id, d.scheduled_attempt
             """
-        ).fetchone()[0]
+        ).fetchall()
         practice_count = connection.execute(
             """
-            SELECT COUNT(*) FROM deception_schedules
-            WHERE game_id IS NOT NULL
+            SELECT COUNT(*) FROM deception_schedules d
+            JOIN games g ON g.id = d.game_id
+            WHERE g.mode = 'practice'
             """
         ).fetchone()[0]
 
-    assert daily_count == 2
+    assert len(daily_schedules) == 4
+    assert {row[1] for row in daily_schedules} == {2, 4}
     assert practice_count == 4
 
 
@@ -964,19 +1192,19 @@ def test_schedule_persists_across_application_restart(
         start_game(client, "daily")
 
     with sqlite3.connect(db_path) as connection:
-        schedule = connection.execute(
+        schedules = connection.execute(
             """
-            SELECT scheduled_attempt, seed
-            FROM deception_schedules
-            WHERE daily_puzzle_key = '2026-07-28'
-            ORDER BY scheduled_attempt
+            SELECT d.scheduled_attempt, d.seed
+            FROM deception_schedules d
+            JOIN games g ON g.id = d.game_id
+            WHERE g.mode = 'daily'
+            ORDER BY g.id, d.scheduled_attempt
             """
         ).fetchall()
 
-    assert schedule == [
-        (2, "first-session"),
-        (5, "first-session"),
-    ]
+    assert len(schedules) == 4
+    assert {row[0] for row in schedules} == {2, 5}
+    assert {row[1] for row in schedules} == {"first-session"}
 
 
 def test_existing_single_row_daily_schedule_is_not_expanded_midday(
@@ -994,21 +1222,25 @@ def test_existing_single_row_daily_schedule_is_not_expanded_midday(
     app = create_app(settings=settings, now_provider=clock)
 
     with TestClient(app) as first:
-        start_game(first, "daily")
+        game = start_game(first, "daily")
 
     with sqlite3.connect(settings.db_path) as connection:
         connection.execute(
             """
             DELETE FROM deception_schedules
-            WHERE daily_puzzle_key = '2026-07-28' AND ordinal = 2
+            WHERE game_id = ? AND ordinal = 2
             """
+            ,
+            (game["gameId"],),
         )
         connection.execute(
             """
             UPDATE deception_schedules
             SET strategy_version = 1
-            WHERE daily_puzzle_key = '2026-07-28'
+            WHERE game_id = ?
             """
+            ,
+            (game["gameId"],),
         )
 
     with TestClient(app) as second:
@@ -1019,8 +1251,10 @@ def test_existing_single_row_daily_schedule_is_not_expanded_midday(
             """
             SELECT scheduled_attempt, strategy_version
             FROM deception_schedules
-            WHERE daily_puzzle_key = '2026-07-28'
+            WHERE game_id = ?
             """
+            ,
+            (game["gameId"],),
         ).fetchall()
 
     assert schedule == [(2, 1)]
@@ -1118,8 +1352,15 @@ def test_layer_one_database_migrates_without_injecting_midgame_lie(
         rules_version = connection.execute(
             "SELECT rules_version FROM games WHERE id = 'legacy-game'"
         ).fetchone()[0]
-        assert version == 7
+        legacy_reason = connection.execute(
+            """
+            SELECT deception_reason FROM guesses
+            WHERE game_id = 'legacy-game' AND attempt = 1
+            """
+        ).fetchone()[0]
+        assert version == 10
     assert rules_version == 1
+    assert legacy_reason == "legacy_unknown"
 
 
 def test_in_progress_version_two_game_keeps_its_stored_schedule(
@@ -1574,13 +1815,13 @@ def test_blackout_activates_after_its_selected_late_game_row(
     assert state == ("activated", 3)
 
 
-def test_blackout_uses_ten_percent_selection_boundary(
+def test_blackout_uses_twenty_percent_selection_boundary(
     tmp_path: Path, clock
 ) -> None:
     settings = replace(
         blackout_settings(tmp_path, attempt=4),
         db_path=tmp_path / "blackout-boundary.sqlite",
-        fixed_blackout_roll=0.10,
+        fixed_blackout_roll=0.20,
     )
     app = create_app(settings=settings, now_provider=clock)
 

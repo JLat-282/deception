@@ -27,6 +27,7 @@ describe("HowDeceptionWorks", () => {
     expect(screen.getByText("Reverse Entry")).toBeInTheDocument();
     expect(screen.getByText("Guess Timer")).toBeInTheDocument();
     expect(screen.getByText("Blackout")).toBeInTheDocument();
+    expect(screen.getByText("Intrusion")).toBeInTheDocument();
     expect(screen.queryByText(/80%|20%/)).not.toBeInTheDocument();
     expect(
       screen.queryByText(

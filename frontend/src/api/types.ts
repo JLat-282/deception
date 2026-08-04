@@ -11,6 +11,17 @@ export type DailyInfo = {
   puzzleKey: string;
   availability: "available" | "used";
   resetAt: string;
+  status:
+    | "unstarted"
+    | "active"
+    | "checkpoint"
+    | "failed"
+    | "forfeited"
+    | "completed"
+    | "expired";
+  currentStage: number;
+  clearedStages: number;
+  currentPreset?: DifficultyPresetSummary;
 };
 
 export type DifficultyPresetSummary = {
@@ -34,6 +45,7 @@ export type StartGameResponse = {
   config: GameConfig;
   puzzleKey?: string;
   preset: DifficultyPresetSummary;
+  dailyStage?: number;
 };
 
 export type DeceptionEvent =
@@ -65,6 +77,17 @@ export type ActivatedGuessTimer = {
   deadlineAt: string;
 };
 
+export type IntrusionPlacement =
+  | "upperLeft"
+  | "upperRight"
+  | "lowerLeft"
+  | "lowerRight";
+
+export type ActivatedIntrusion = {
+  state: "activated";
+  placement: IntrusionPlacement;
+};
+
 export type GuessResponse = {
   guess: string;
   feedback: string;
@@ -77,6 +100,7 @@ export type GuessResponse = {
   };
   timer?: ActivatedGuessTimer | { state: "completed" };
   blackout?: { state: "activated" };
+  intrusion?: ActivatedIntrusion;
 };
 
 export type TimedOutResponse = {

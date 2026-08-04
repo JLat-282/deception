@@ -13,8 +13,10 @@ type GameResultProps = {
   answer: string;
   attempt: number;
   deception?: DeceptionReveal;
+  dailyStage?: number;
   onClose: () => void;
-  onPractice: () => void;
+  onInfinite: () => void;
+  onDescend: () => void;
   onModes: () => void;
 };
 
@@ -24,8 +26,10 @@ export function GameResult({
   answer,
   attempt,
   deception,
+  dailyStage,
   onClose,
-  onPractice,
+  onInfinite,
+  onDescend,
   onModes,
 }: GameResultProps) {
   const feedbackText: Record<FeedbackMarker, string> = {
@@ -59,6 +63,15 @@ export function GameResult({
     return `Row ${event.scheduledAttempt} was selected, but its feedback stayed truthful.`;
   };
 
+  const canDescend =
+    mode === "daily" && status === "won" && !!dailyStage && dailyStage < 4;
+  const nextStageLabel =
+    dailyStage === 1
+      ? "Descend to Doubt II"
+      : dailyStage === 2
+        ? "Descend to Doubt III"
+        : "Enter Deception";
+
   return (
     <Dialog
       title={status === "won" ? "Word found." : "The word escaped."}
@@ -90,9 +103,13 @@ export function GameResult({
         <button
           className="mode-button mode-button--primary"
           type="button"
-          onClick={onPractice}
+          onClick={canDescend ? onDescend : onInfinite}
         >
-          {mode === "daily" ? "Play Practice" : "Play Again"}
+          {canDescend
+            ? nextStageLabel
+            : mode === "daily"
+              ? "Play Infinite"
+              : "Play Again"}
         </button>
         <button className="text-button" type="button" onClick={onModes}>
           Return to modes

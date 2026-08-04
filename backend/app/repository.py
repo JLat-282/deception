@@ -10,6 +10,26 @@ from typing import Iterator, Literal
 
 GameMode = Literal["daily", "practice"]
 GameStatus = Literal["playing", "won", "lost"]
+DailyRunStatus = Literal[
+    "unstarted",
+    "active",
+    "checkpoint",
+    "failed",
+    "forfeited",
+    "completed",
+    "expired",
+]
+DailyStageStatus = Literal["ready", "active", "won", "lost", "forfeited"]
+StoredDeceptionReason = Literal[
+    "activated",
+    "deadline_expired",
+    "no_candidate",
+    "strategy_restricted",
+    "not_scheduled",
+    "winning_guess",
+    "final_guess",
+    "legacy_unknown",
+]
 CURRENT_RULES_VERSION = 8
 CURRENT_DECEPTION_STRATEGY_VERSION = 4
 
@@ -37,11 +57,39 @@ class DailyAttempt:
 
 
 @dataclass(frozen=True)
+class DailyDescentRun:
+    device_id: str
+    puzzle_key: str
+    status: DailyRunStatus
+    current_stage: int
+    continuation_hash: str | None
+
+
+@dataclass(frozen=True)
+class DailyDescentPuzzle:
+    puzzle_key: str
+    stage_index: int
+    preset_key: str
+    answer: str
+    blueprint_json: str | None
+
+
+@dataclass(frozen=True)
+class DailyDescentStage:
+    device_id: str
+    puzzle_key: str
+    stage_index: int
+    game_id: str
+    status: DailyStageStatus
+
+
+@dataclass(frozen=True)
 class StoredGuess:
     attempt: int
     guess: str
     truth_feedback: str
     display_feedback: str
+    deception_reason: StoredDeceptionReason
 
 
 @dataclass(frozen=True)
@@ -96,6 +144,7 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS daily_puzzles (
     puzzle_key TEXT PRIMARY KEY,
     answer TEXT NOT NULL,
+    blueprint_json TEXT,
     answer_list_version TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -132,9 +181,14 @@ CREATE TABLE IF NOT EXISTS guesses (
     guess TEXT NOT NULL,
     truth_feedback TEXT NOT NULL,
     display_feedback TEXT NOT NULL,
+    deception_reason TEXT NOT NULL DEFAULT 'legacy_unknown',
     created_at TEXT NOT NULL,
     UNIQUE (game_id, attempt)
 );
+"""
+
+MIGRATION_10 = """
+-- Applied conditionally because SQLite cannot add an existing column.
 """
 
 
@@ -310,6 +364,52 @@ CREATE TABLE IF NOT EXISTS guess_timer_events (
 );
 """
 
+MIGRATION_9 = """
+CREATE TABLE IF NOT EXISTS daily_descent_puzzles (
+    puzzle_key TEXT NOT NULL,
+    stage_index INTEGER NOT NULL CHECK (stage_index BETWEEN 1 AND 4),
+    preset_key TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    answer_list_version TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (puzzle_key, stage_index),
+    UNIQUE (puzzle_key, answer)
+);
+
+CREATE TABLE IF NOT EXISTS daily_descent_runs (
+    device_id TEXT NOT NULL REFERENCES devices(id),
+    puzzle_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN (
+            'unstarted', 'active', 'checkpoint', 'failed',
+            'forfeited', 'completed', 'expired'
+        )
+    ),
+    current_stage INTEGER NOT NULL CHECK (current_stage BETWEEN 1 AND 4),
+    continuation_hash TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (device_id, puzzle_key)
+);
+
+CREATE TABLE IF NOT EXISTS daily_descent_stages (
+    device_id TEXT NOT NULL,
+    puzzle_key TEXT NOT NULL,
+    stage_index INTEGER NOT NULL CHECK (stage_index BETWEEN 1 AND 4),
+    game_id TEXT NOT NULL UNIQUE REFERENCES games(id),
+    status TEXT NOT NULL CHECK (
+        status IN ('ready', 'active', 'won', 'lost', 'forfeited')
+    ),
+    consumed_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (device_id, puzzle_key, stage_index),
+    FOREIGN KEY (device_id, puzzle_key)
+        REFERENCES daily_descent_runs(device_id, puzzle_key)
+);
+"""
+
 class Repository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -424,6 +524,37 @@ class Repository:
                     """
                 )
                 connection.execute("PRAGMA user_version = 7")
+            if version < 8:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(guesses)"
+                    ).fetchall()
+                }
+                if "deception_reason" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE guesses ADD COLUMN deception_reason TEXT
+                        NOT NULL DEFAULT 'legacy_unknown'
+                        """
+                    )
+                connection.execute("PRAGMA user_version = 8")
+            if version < 9:
+                self._execute_script(connection, MIGRATION_9)
+                connection.execute("PRAGMA user_version = 9")
+            if version < 10:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(daily_descent_puzzles)"
+                    ).fetchall()
+                }
+                if "blueprint_json" not in columns:
+                    connection.execute(
+                        "ALTER TABLE daily_descent_puzzles "
+                        "ADD COLUMN blueprint_json TEXT"
+                    )
+                connection.execute("PRAGMA user_version = 10")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -566,6 +697,334 @@ class Repository:
             ) VALUES (?, ?, ?, NULL, ?)
             """,
             (device_id, puzzle_key, game_id, created_at.isoformat()),
+        )
+
+    @staticmethod
+    def list_daily_descent_puzzles(
+        connection: sqlite3.Connection, puzzle_key: str
+    ) -> list[DailyDescentPuzzle]:
+        rows = connection.execute(
+            """
+            SELECT puzzle_key, stage_index, preset_key, answer, blueprint_json
+            FROM daily_descent_puzzles
+            WHERE puzzle_key = ?
+            ORDER BY stage_index
+            """,
+            (puzzle_key,),
+        ).fetchall()
+        return [
+            DailyDescentPuzzle(
+                puzzle_key=row["puzzle_key"],
+                stage_index=row["stage_index"],
+                preset_key=row["preset_key"],
+                answer=row["answer"],
+                blueprint_json=row["blueprint_json"],
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def create_daily_descent_puzzle(
+        connection: sqlite3.Connection,
+        *,
+        puzzle_key: str,
+        stage_index: int,
+        preset_key: str,
+        answer: str,
+        blueprint_json: str,
+        answer_list_version: str,
+        created_at: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO daily_descent_puzzles(
+                puzzle_key, stage_index, preset_key, answer,
+                answer_list_version, blueprint_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                puzzle_key,
+                stage_index,
+                preset_key,
+                answer,
+                answer_list_version,
+                blueprint_json,
+                created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    def set_daily_descent_blueprint(
+        connection: sqlite3.Connection,
+        puzzle_key: str,
+        stage_index: int,
+        blueprint_json: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE daily_descent_puzzles SET blueprint_json = ?
+            WHERE puzzle_key = ? AND stage_index = ? AND blueprint_json IS NULL
+            """,
+            (blueprint_json, puzzle_key, stage_index),
+        )
+
+    @staticmethod
+    def get_daily_descent_run(
+        connection: sqlite3.Connection, device_id: str, puzzle_key: str
+    ) -> DailyDescentRun | None:
+        row = connection.execute(
+            """
+            SELECT device_id, puzzle_key, status, current_stage,
+                   continuation_hash
+            FROM daily_descent_runs
+            WHERE device_id = ? AND puzzle_key = ?
+            """,
+            (device_id, puzzle_key),
+        ).fetchone()
+        if row is None:
+            return None
+        return DailyDescentRun(
+            device_id=row["device_id"],
+            puzzle_key=row["puzzle_key"],
+            status=row["status"],
+            current_stage=row["current_stage"],
+            continuation_hash=row["continuation_hash"],
+        )
+
+    @staticmethod
+    def create_daily_descent_run(
+        connection: sqlite3.Connection,
+        device_id: str,
+        puzzle_key: str,
+        created_at: datetime,
+    ) -> DailyDescentRun:
+        timestamp = created_at.isoformat()
+        connection.execute(
+            """
+            INSERT INTO daily_descent_runs(
+                device_id, puzzle_key, status, current_stage,
+                continuation_hash, created_at, updated_at
+            ) VALUES (?, ?, 'unstarted', 1, NULL, ?, ?)
+            """,
+            (device_id, puzzle_key, timestamp, timestamp),
+        )
+        return DailyDescentRun(
+            device_id=device_id,
+            puzzle_key=puzzle_key,
+            status="unstarted",
+            current_stage=1,
+            continuation_hash=None,
+        )
+
+    @staticmethod
+    def get_daily_descent_stage(
+        connection: sqlite3.Connection,
+        device_id: str,
+        puzzle_key: str,
+        stage_index: int,
+    ) -> DailyDescentStage | None:
+        row = connection.execute(
+            """
+            SELECT device_id, puzzle_key, stage_index, game_id, status
+            FROM daily_descent_stages
+            WHERE device_id = ? AND puzzle_key = ? AND stage_index = ?
+            """,
+            (device_id, puzzle_key, stage_index),
+        ).fetchone()
+        if row is None:
+            return None
+        return DailyDescentStage(
+            device_id=row["device_id"],
+            puzzle_key=row["puzzle_key"],
+            stage_index=row["stage_index"],
+            game_id=row["game_id"],
+            status=row["status"],
+        )
+
+    @staticmethod
+    def get_daily_descent_stage_for_game(
+        connection: sqlite3.Connection, game_id: str
+    ) -> DailyDescentStage | None:
+        row = connection.execute(
+            """
+            SELECT device_id, puzzle_key, stage_index, game_id, status
+            FROM daily_descent_stages WHERE game_id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DailyDescentStage(
+            device_id=row["device_id"],
+            puzzle_key=row["puzzle_key"],
+            stage_index=row["stage_index"],
+            game_id=row["game_id"],
+            status=row["status"],
+        )
+
+    @staticmethod
+    def create_daily_descent_stage(
+        connection: sqlite3.Connection,
+        *,
+        device_id: str,
+        puzzle_key: str,
+        stage_index: int,
+        game_id: str,
+        created_at: datetime,
+    ) -> DailyDescentStage:
+        timestamp = created_at.isoformat()
+        connection.execute(
+            """
+            INSERT INTO daily_descent_stages(
+                device_id, puzzle_key, stage_index, game_id, status,
+                consumed_at, completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'ready', NULL, NULL, ?, ?)
+            """,
+            (device_id, puzzle_key, stage_index, game_id, timestamp, timestamp),
+        )
+        return DailyDescentStage(
+            device_id=device_id,
+            puzzle_key=puzzle_key,
+            stage_index=stage_index,
+            game_id=game_id,
+            status="ready",
+        )
+
+    @staticmethod
+    def activate_daily_descent_stage(
+        connection: sqlite3.Connection,
+        *,
+        device_id: str,
+        puzzle_key: str,
+        stage_index: int,
+        continuation_hash: str,
+        activated_at: datetime,
+    ) -> None:
+        timestamp = activated_at.isoformat()
+        connection.execute(
+            """
+            UPDATE daily_descent_stages
+            SET status = 'active', consumed_at = ?, updated_at = ?
+            WHERE device_id = ? AND puzzle_key = ? AND stage_index = ?
+              AND status = 'ready'
+            """,
+            (timestamp, timestamp, device_id, puzzle_key, stage_index),
+        )
+        connection.execute(
+            """
+            UPDATE daily_descent_runs
+            SET status = 'active', continuation_hash = ?, updated_at = ?
+            WHERE device_id = ? AND puzzle_key = ?
+              AND status IN ('unstarted', 'checkpoint')
+              AND current_stage = ?
+            """,
+            (
+                continuation_hash,
+                timestamp,
+                device_id,
+                puzzle_key,
+                stage_index,
+            ),
+        )
+
+    @staticmethod
+    def finish_daily_descent_stage(
+        connection: sqlite3.Connection,
+        *,
+        device_id: str,
+        puzzle_key: str,
+        stage_index: int,
+        won: bool,
+        finished_at: datetime,
+    ) -> DailyRunStatus:
+        timestamp = finished_at.isoformat()
+        stage_status: DailyStageStatus = "won" if won else "lost"
+        connection.execute(
+            """
+            UPDATE daily_descent_stages
+            SET status = ?, completed_at = ?, updated_at = ?
+            WHERE device_id = ? AND puzzle_key = ? AND stage_index = ?
+              AND status = 'active'
+            """,
+            (
+                stage_status,
+                timestamp,
+                timestamp,
+                device_id,
+                puzzle_key,
+                stage_index,
+            ),
+        )
+        if not won:
+            run_status: DailyRunStatus = "failed"
+            next_stage = stage_index
+        elif stage_index == 4:
+            run_status = "completed"
+            next_stage = 4
+        else:
+            run_status = "checkpoint"
+            next_stage = stage_index + 1
+        connection.execute(
+            """
+            UPDATE daily_descent_runs
+            SET status = ?, current_stage = ?, continuation_hash = NULL,
+                updated_at = ?
+            WHERE device_id = ? AND puzzle_key = ? AND status = 'active'
+              AND current_stage = ?
+            """,
+            (
+                run_status,
+                next_stage,
+                timestamp,
+                device_id,
+                puzzle_key,
+                stage_index,
+            ),
+        )
+        return run_status
+
+    @staticmethod
+    def forfeit_daily_descent_run(
+        connection: sqlite3.Connection,
+        device_id: str,
+        puzzle_key: str,
+        stage_index: int,
+        forfeited_at: datetime,
+    ) -> None:
+        timestamp = forfeited_at.isoformat()
+        connection.execute(
+            """
+            UPDATE daily_descent_stages
+            SET status = 'forfeited', completed_at = ?, updated_at = ?
+            WHERE device_id = ? AND puzzle_key = ? AND stage_index = ?
+              AND status = 'active'
+            """,
+            (timestamp, timestamp, device_id, puzzle_key, stage_index),
+        )
+        connection.execute(
+            """
+            UPDATE daily_descent_runs
+            SET status = 'forfeited', continuation_hash = NULL, updated_at = ?
+            WHERE device_id = ? AND puzzle_key = ? AND status = 'active'
+            """,
+            (timestamp, device_id, puzzle_key),
+        )
+
+    @staticmethod
+    def expire_daily_descent_run(
+        connection: sqlite3.Connection,
+        device_id: str,
+        puzzle_key: str,
+        expired_at: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE daily_descent_runs
+            SET status = 'expired', continuation_hash = NULL, updated_at = ?
+            WHERE device_id = ? AND puzzle_key = ?
+              AND status IN ('unstarted', 'active', 'checkpoint')
+            """,
+            (expired_at.isoformat(), device_id, puzzle_key),
         )
 
     @staticmethod
@@ -728,7 +1187,8 @@ class Repository:
     ) -> list[StoredGuess]:
         rows = connection.execute(
             """
-            SELECT attempt, guess, truth_feedback, display_feedback
+            SELECT attempt, guess, truth_feedback, display_feedback,
+                   deception_reason
             FROM guesses
             WHERE game_id = ?
             ORDER BY attempt
@@ -741,6 +1201,7 @@ class Repository:
                 guess=row["guess"],
                 truth_feedback=row["truth_feedback"],
                 display_feedback=row["display_feedback"],
+                deception_reason=row["deception_reason"],
             )
             for row in rows
         ]
@@ -1280,6 +1741,7 @@ class Repository:
         guess: str,
         truth_feedback: str,
         display_feedback: str,
+        deception_reason: StoredDeceptionReason,
         status: GameStatus,
         created_at: datetime,
     ) -> None:
@@ -1288,8 +1750,8 @@ class Repository:
             """
             INSERT INTO guesses(
                 game_id, attempt, guess, truth_feedback,
-                display_feedback, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                display_feedback, deception_reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game_id,
@@ -1297,6 +1759,7 @@ class Repository:
                 guess,
                 truth_feedback,
                 display_feedback,
+                deception_reason,
                 timestamp,
             ),
         )

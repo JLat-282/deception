@@ -30,6 +30,7 @@ class PresetDefinition:
     blackout_probability: float
     max_blackout_events: int
     blackout_reserves_next_attempt: bool
+    intrusion_probability: float
     combination_policy: Literal["none", "limited", "broad"]
 
 
@@ -53,6 +54,7 @@ PRESETS: Mapping[str, PresetDefinition] = MappingProxyType(
             blackout_probability=0.0,
             max_blackout_events=0,
             blackout_reserves_next_attempt=False,
+            intrusion_probability=0.0,
             combination_policy="none",
         ),
         "doubt-2@1": PresetDefinition(
@@ -73,6 +75,7 @@ PRESETS: Mapping[str, PresetDefinition] = MappingProxyType(
             blackout_probability=0.20,
             max_blackout_events=1,
             blackout_reserves_next_attempt=True,
+            intrusion_probability=0.10,
             combination_policy="none",
         ),
         "doubt-3@1": PresetDefinition(
@@ -93,6 +96,7 @@ PRESETS: Mapping[str, PresetDefinition] = MappingProxyType(
             blackout_probability=0.45,
             max_blackout_events=1,
             blackout_reserves_next_attempt=False,
+            intrusion_probability=0.30,
             combination_policy="limited",
         ),
         "deception@1": PresetDefinition(
@@ -113,6 +117,7 @@ PRESETS: Mapping[str, PresetDefinition] = MappingProxyType(
             blackout_probability=0.80,
             max_blackout_events=1,
             blackout_reserves_next_attempt=False,
+            intrusion_probability=1.0,
             combination_policy="broad",
         ),
     }
@@ -146,6 +151,7 @@ def validate_presets() -> None:
             preset.false_victory_probability,
             preset.reverse_fallback_probability,
             preset.blackout_probability,
+            preset.intrusion_probability,
         ):
             if not 0 <= probability <= 1:
                 raise ValueError(f"Preset probability is invalid: {preset.key}")
@@ -166,6 +172,7 @@ class BlueprintOverrides:
     blackout_roll: float | None = None
     blackout_attempt: int | None = None
     false_victory_enabled: bool | None = None
+    intrusion_probability: float | None = None
     timer_enabled: bool = True
     reverse_enabled: bool = True
     blackout_enabled: bool = True
@@ -192,6 +199,7 @@ class GameBlueprint:
     reverse_fallback_probability: float
     blackout_attempt: int | None
     blackout_blocked_attempts: tuple[int, ...]
+    intrusion_probability: float
 
     @property
     def max_false_tiles(self) -> int:
@@ -232,7 +240,7 @@ class GameBlueprint:
                     ),
                 )
             return cls(
-                schema_version=3,
+                schema_version=4,
                 preset_key=value["preset_key"],
                 seed=value["seed"],
                 lie_attempts=tuple(value["lie_attempts"]),
@@ -249,11 +257,16 @@ class GameBlueprint:
                 blackout_blocked_attempts=tuple(
                     value["blackout_blocked_attempts"]
                 ),
+                intrusion_probability=0.0,
             )
         if schema_version == 2:
             value["schema_version"] = 3
             value["false_victory_enabled"] = False
-        elif schema_version != 3:
+            schema_version = 3
+        if schema_version == 3:
+            value["schema_version"] = 4
+            value["intrusion_probability"] = 0.0
+        elif schema_version != 4:
             raise ValueError(
                 f"Unsupported game blueprint schema: {schema_version}"
             )
@@ -328,6 +341,11 @@ def build_blueprint(
     preset = get_preset(preset_key)
     if not preset.available:
         raise ValueError(f"Difficulty preset is not available: {preset_key}")
+    if (
+        overrides.intrusion_probability is not None
+        and not 0 <= overrides.intrusion_probability <= 1
+    ):
+        raise ValueError("Intrusion probability must be between zero and one.")
 
     lie_count = _weighted_choice(
         seed, "blueprint:v1:lie-count", preset.lie_count_weights
@@ -463,7 +481,7 @@ def build_blueprint(
     )
 
     return GameBlueprint(
-        schema_version=3,
+        schema_version=4,
         preset_key=preset_key,
         seed=seed,
         lie_attempts=lie_attempts,
@@ -480,4 +498,38 @@ def build_blueprint(
         reverse_fallback_probability=preset.reverse_fallback_probability,
         blackout_attempt=blackout_attempt,
         blackout_blocked_attempts=blackout_blocked,
+        intrusion_probability=(
+            overrides.intrusion_probability
+            if overrides.intrusion_probability is not None
+            else preset.intrusion_probability
+        ),
     )
+
+
+IntrusionPlacement = Literal[
+    "upperLeft", "upperRight", "lowerLeft", "lowerRight"
+]
+
+
+def intrusion_for_attempt(
+    blueprint: GameBlueprint,
+    attempt: int,
+) -> IntrusionPlacement | None:
+    """Return this accepted row's deterministic Intrusion, if any."""
+    if attempt not in range(2, 6):
+        return None
+    if (
+        _probability(blueprint.seed, f"blueprint:v4:intrusion:{attempt}")
+        >= blueprint.intrusion_probability
+    ):
+        return None
+    placements: tuple[IntrusionPlacement, ...] = (
+        "upperLeft",
+        "upperRight",
+        "lowerLeft",
+        "lowerRight",
+    )
+    index = _number(
+        blueprint.seed, f"blueprint:v4:intrusion-placement:{attempt}"
+    ) % len(placements)
+    return placements[index]

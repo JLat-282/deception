@@ -16,6 +16,7 @@ from .difficulty import (
     GameBlueprint,
     build_blueprint,
     get_preset,
+    intrusion_for_attempt,
     public_presets,
 )
 from .engine import MAX_GUESSES, WORD_LENGTH, TruthEngine, normalize_word
@@ -23,16 +24,20 @@ from .errors import DomainError, GuessValidationError
 from .repository import (
     BlackoutState,
     CURRENT_RULES_VERSION,
+    DailyDescentRun,
+    DailyDescentStage,
     DeceptionSchedule,
     GuessTimerState,
     Repository,
     ReverseEntryState,
     StoredGame,
     StoredGuess,
+    StoredDeceptionReason,
 )
 from .schemas import (
     ActivatedBlackout,
     ActivatedGuessTimer,
+    ActivatedIntrusion,
     ActivatedDeceptionReveal,
     AttemptResponse,
     BootstrapResponse,
@@ -121,18 +126,45 @@ class GameService:
         window = daily_window(now)
         with self.repository.transaction() as connection:
             self.repository.ensure_device(connection, device_id, now)
-            attempt = self.repository.get_daily_attempt(
+            run = self.repository.get_daily_descent_run(
                 connection, device_id, window.puzzle_key
             )
-        availability = (
-            "used" if attempt is not None and attempt.consumed_at else "available"
+            if run is not None and run.status == "active":
+                self.repository.forfeit_daily_descent_run(
+                    connection,
+                    device_id,
+                    window.puzzle_key,
+                    run.current_stage,
+                    now,
+                )
+                run = self.repository.get_daily_descent_run(
+                    connection, device_id, window.puzzle_key
+                )
+        run_status = run.status if run is not None else "unstarted"
+        current_stage = run.current_stage if run is not None else 1
+        cleared_stages = (
+            4
+            if run_status == "completed"
+            else max(0, current_stage - 1)
         )
+        availability = (
+            "used"
+            if run_status in {"active", "failed", "forfeited", "completed", "expired"}
+            else "available"
+        )
+        preset = sorted(public_presets(), key=lambda item: item.order)[
+            current_stage - 1
+        ]
         return BootstrapResponse(
             config=self.config,
             daily=DailyInfo(
                 puzzle_key=window.puzzle_key,
                 availability=availability,
                 reset_at=window.reset_at,
+                status=run_status,
+                current_stage=current_stage,
+                cleared_stages=cleared_stages,
+                current_preset=self._preset_summary(preset.key),
             ),
             presets=[
                 self._preset_summary(preset.key)
@@ -140,19 +172,199 @@ class GameService:
             ],
         )
 
-    def _daily_answer(self, window: PuzzleWindow) -> str:
-        if self.settings.fixed_answer:
-            return self.settings.fixed_answer.lower()
-        message = (
-            f"{self.settings.answer_list_version}:{window.puzzle_key}"
-        ).encode("utf-8")
-        digest = hmac.new(
-            self.settings.daily_seed.encode("utf-8"),
-            message,
-            hashlib.sha256,
-        ).digest()
-        index = int.from_bytes(digest[:8], "big") % len(self.engine.answers)
-        return self.engine.answers[index]
+    def _ensure_daily_descent_puzzles(
+        self, connection, window: PuzzleWindow, now: datetime
+    ):
+        existing = self.repository.list_daily_descent_puzzles(
+            connection, window.puzzle_key
+        )
+        for puzzle in existing:
+            if puzzle.blueprint_json is None:
+                self.repository.set_daily_descent_blueprint(
+                    connection,
+                    window.puzzle_key,
+                    puzzle.stage_index,
+                    self._new_blueprint(
+                        puzzle.preset_key,
+                        mode="daily",
+                        puzzle_key=window.puzzle_key,
+                    ).to_json(),
+                )
+        if len(existing) == 4:
+            return self.repository.list_daily_descent_puzzles(
+                connection, window.puzzle_key
+            )
+
+        selected_answers = {puzzle.answer for puzzle in existing}
+        existing_stages = {puzzle.stage_index for puzzle in existing}
+        presets = sorted(public_presets(), key=lambda preset: preset.order)
+        for stage_index, preset in enumerate(presets, start=1):
+            if stage_index in existing_stages:
+                continue
+            if stage_index == 1 and self.settings.fixed_answer:
+                answer = self.settings.fixed_answer.lower()
+            else:
+                message = (
+                    f"{self.settings.answer_list_version}:{window.puzzle_key}:"
+                    f"daily-descent:{stage_index}"
+                ).encode("utf-8")
+                digest = hmac.new(
+                    self.settings.daily_seed.encode("utf-8"),
+                    message,
+                    hashlib.sha256,
+                ).digest()
+                start = int.from_bytes(digest[:8], "big") % len(
+                    self.engine.answers
+                )
+                answer = next(
+                    self.engine.answers[(start + offset) % len(self.engine.answers)]
+                    for offset in range(len(self.engine.answers))
+                    if self.engine.answers[(start + offset) % len(self.engine.answers)]
+                    not in selected_answers
+                )
+            selected_answers.add(answer)
+            self.repository.create_daily_descent_puzzle(
+                connection,
+                puzzle_key=window.puzzle_key,
+                stage_index=stage_index,
+                preset_key=preset.key,
+                answer=answer,
+                answer_list_version=self.settings.answer_list_version,
+                blueprint_json=self._new_blueprint(
+                    preset.key,
+                    mode="daily",
+                    puzzle_key=window.puzzle_key,
+                ).to_json(),
+                created_at=now,
+            )
+        return self.repository.list_daily_descent_puzzles(
+            connection, window.puzzle_key
+        )
+
+    @staticmethod
+    def _continuation_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _require_continuation_token(token: str | None) -> str:
+        if token is None or len(token) < 20:
+            raise DomainError(
+                400,
+                "CONTINUATION_TOKEN_REQUIRED",
+                "This Daily Descent stage needs an active-page token.",
+            )
+        return token
+
+    def _daily_stage_access(
+        self,
+        connection,
+        game: StoredGame,
+        continuation_token: str | None,
+        now: datetime,
+        *,
+        bind_if_ready: bool,
+    ) -> tuple[DailyDescentRun, DailyDescentStage]:
+        token = self._require_continuation_token(continuation_token)
+        if game.puzzle_key is None:
+            raise DomainError(
+                503,
+                "SERVICE_UNAVAILABLE",
+                "The Daily Descent stage is missing its puzzle key.",
+            )
+        current_window = daily_window(now)
+        if current_window.puzzle_key != game.puzzle_key:
+            self.repository.expire_daily_descent_run(
+                connection, game.device_id, game.puzzle_key, now
+            )
+            raise DomainError(
+                409,
+                "DAILY_DESCENT_EXPIRED",
+                "This Daily Descent expired at the reset.",
+            )
+        run = self.repository.get_daily_descent_run(
+            connection, game.device_id, game.puzzle_key
+        )
+        stage = self.repository.get_daily_descent_stage_for_game(
+            connection, game.game_id
+        )
+        if run is None or stage is None or run.current_stage != stage.stage_index:
+            raise DomainError(
+                503,
+                "SERVICE_UNAVAILABLE",
+                "The Daily Descent stage state is unavailable.",
+            )
+        token_hash = self._continuation_hash(token)
+        if run.status == "active":
+            if (
+                stage.status != "active"
+                or run.continuation_hash is None
+                or not hmac.compare_digest(run.continuation_hash, token_hash)
+            ):
+                raise DomainError(
+                    409,
+                    "CONTINUATION_MISMATCH",
+                    "This Daily Descent stage belongs to another active page.",
+                )
+            return run, stage
+        if (
+            run.status in {"unstarted", "checkpoint"}
+            and stage.status == "ready"
+        ):
+            if bind_if_ready:
+                self.repository.activate_daily_descent_stage(
+                    connection,
+                    device_id=game.device_id,
+                    puzzle_key=game.puzzle_key,
+                    stage_index=stage.stage_index,
+                    continuation_hash=token_hash,
+                    activated_at=now,
+                )
+                active_run = self.repository.get_daily_descent_run(
+                    connection, game.device_id, game.puzzle_key
+                )
+                active_stage = self.repository.get_daily_descent_stage_for_game(
+                    connection, game.game_id
+                )
+                if active_run is None or active_stage is None:
+                    raise DomainError(
+                        503,
+                        "SERVICE_UNAVAILABLE",
+                        "The Daily Descent stage could not be activated.",
+                    )
+                return active_run, active_stage
+            return run, stage
+        raise DomainError(
+            409,
+            "DAILY_DESCENT_FINISHED",
+            "This Daily Descent stage can no longer be played.",
+        )
+
+    def _finish_daily_stage(
+        self,
+        connection,
+        game: StoredGame,
+        status: str,
+        now: datetime,
+    ) -> None:
+        if game.mode != "daily" or status not in {"won", "lost"}:
+            return
+        stage = self.repository.get_daily_descent_stage_for_game(
+            connection, game.game_id
+        )
+        if stage is None:
+            raise DomainError(
+                503,
+                "SERVICE_UNAVAILABLE",
+                "The Daily Descent stage state is unavailable.",
+            )
+        self.repository.finish_daily_descent_stage(
+            connection,
+            device_id=stage.device_id,
+            puzzle_key=stage.puzzle_key,
+            stage_index=stage.stage_index,
+            won=status == "won",
+            finished_at=now,
+        )
 
     def _practice_answer(self, previous_answer: str | None) -> str:
         if self.settings.fixed_answer:
@@ -235,20 +447,6 @@ class GameService:
         game, blueprint = self._blueprint_for_game(connection, game)
         seed = blueprint.seed
         scheduled_attempts = blueprint.lie_attempts
-        if game.mode == "daily":
-            if game.puzzle_key is None:
-                raise DomainError(
-                    503,
-                    "SERVICE_UNAVAILABLE",
-                    "The Daily game is missing its puzzle key.",
-                )
-            return self.repository.replace_deception_schedules(
-                connection,
-                scheduled_attempts=scheduled_attempts,
-                seed=seed,
-                created_at=now,
-                daily_puzzle_key=game.puzzle_key,
-            )
         return self.repository.replace_deception_schedules(
             connection,
             scheduled_attempts=scheduled_attempts,
@@ -260,12 +458,6 @@ class GameService:
     def _get_schedules(
         self, connection, game: StoredGame
     ) -> list[DeceptionSchedule]:
-        if game.mode == "daily":
-            if game.puzzle_key is None:
-                return []
-            return self.repository.list_deception_schedules(
-                connection, daily_puzzle_key=game.puzzle_key
-            )
         return self.repository.list_deception_schedules(
             connection, game_id=game.game_id
         )
@@ -533,35 +725,42 @@ class GameService:
         device_id: str,
         mode: str,
         preset_key: str | None = None,
+        continuation_token: str | None = None,
     ) -> StartGameResponse:
         if mode not in {"daily", "practice"}:
             raise DomainError(
                 400, "INVALID_MODE", "Choose either daily or practice mode."
             )
 
-        selected_preset_key = (
-            DEFAULT_PRESET_KEY
-            if mode == "daily" or preset_key is None
-            else preset_key
-        )
-        try:
-            selected_preset = get_preset(selected_preset_key)
-        except ValueError as error:
-            raise DomainError(
-                400,
-                "INVALID_PRESET",
-                "Choose a recognized difficulty.",
-            ) from error
-        if not selected_preset.available:
-            raise DomainError(
-                409,
-                "PRESET_UNAVAILABLE",
-                "That difficulty is not available yet.",
-            )
+        selected_preset_key = preset_key or DEFAULT_PRESET_KEY
+        if mode == "daily":
+            self._require_continuation_token(continuation_token)
+            if preset_key is not None:
+                raise DomainError(
+                    400,
+                    "DAILY_PRESET_LOCKED",
+                    "Daily Descent chooses each stage in order.",
+                )
+        else:
+            try:
+                selected_preset = get_preset(selected_preset_key)
+            except ValueError as error:
+                raise DomainError(
+                    400,
+                    "INVALID_PRESET",
+                    "Choose a recognized difficulty.",
+                ) from error
+            if not selected_preset.available:
+                raise DomainError(
+                    409,
+                    "PRESET_UNAVAILABLE",
+                    "That difficulty is not available yet.",
+                )
 
         now = self.now()
         game_id = secrets.token_urlsafe(24)
         puzzle_key: str | None = None
+        stage_index: int | None = None
 
         with self.repository.transaction() as connection:
             self.repository.ensure_device(connection, device_id, now)
@@ -569,18 +768,43 @@ class GameService:
             if mode == "daily":
                 window = daily_window(now)
                 puzzle_key = window.puzzle_key
-                attempt = self.repository.get_daily_attempt(
+                puzzles = self._ensure_daily_descent_puzzles(
+                    connection, window, now
+                )
+                run = self.repository.get_daily_descent_run(
                     connection, device_id, puzzle_key
                 )
-                if attempt is not None:
-                    if attempt.consumed_at is not None:
-                        raise DomainError(
-                            409,
-                            "DAILY_ALREADY_USED",
-                            "Today’s Daily attempt has already been used.",
-                        )
+                if run is None:
+                    run = self.repository.create_daily_descent_run(
+                        connection, device_id, puzzle_key, now
+                    )
+                if run.status in {
+                    "failed",
+                    "forfeited",
+                    "completed",
+                    "expired",
+                }:
+                    raise DomainError(
+                        409,
+                        "DAILY_DESCENT_FINISHED",
+                        "Today’s Daily Descent has already ended.",
+                    )
+                if run.status == "active":
+                    raise DomainError(
+                        409,
+                        "DAILY_STAGE_ACTIVE",
+                        "This Daily Descent stage is already in progress.",
+                    )
+
+                stage_index = run.current_stage
+                puzzle = puzzles[stage_index - 1]
+                selected_preset_key = puzzle.preset_key
+                existing_stage = self.repository.get_daily_descent_stage(
+                    connection, device_id, puzzle_key, stage_index
+                )
+                if existing_stage is not None:
                     pending_game = self.repository.get_game(
-                        connection, attempt.game_id
+                        connection, existing_stage.game_id
                     )
                     if pending_game is None:
                         raise DomainError(
@@ -591,37 +815,27 @@ class GameService:
                     pending_game, _ = self._ensure_current_rules(
                         connection, pending_game, now
                     )
-                    return self._start_response(pending_game)
-
-                answer = self.repository.get_daily_puzzle(
-                    connection, puzzle_key
-                )
-                if answer is None:
-                    answer = self._daily_answer(window)
-                    self.repository.create_daily_puzzle(
-                        connection,
-                        puzzle_key,
-                        answer,
-                        self.settings.answer_list_version,
-                        now,
+                    return self._start_response(
+                        pending_game, daily_stage=stage_index
                     )
                 game = self.repository.create_game(
                     connection,
                     game_id,
                     device_id,
                     "daily",
-                    answer,
+                    puzzle.answer,
                     now,
                     puzzle_key,
                     preset_key=selected_preset_key,
-                    blueprint_json=self._new_blueprint(
-                        selected_preset_key,
-                        mode="daily",
-                        puzzle_key=puzzle_key,
-                    ).to_json(),
+                    blueprint_json=puzzle.blueprint_json,
                 )
-                self.repository.create_daily_attempt(
-                    connection, device_id, puzzle_key, game_id, now
+                self.repository.create_daily_descent_stage(
+                    connection,
+                    device_id=device_id,
+                    puzzle_key=puzzle_key,
+                    stage_index=stage_index,
+                    game_id=game_id,
+                    created_at=now,
                 )
             else:
                 previous_answer = self.repository.last_practice_answer(
@@ -644,15 +858,21 @@ class GameService:
                 )
             game, _ = self._ensure_current_rules(connection, game, now)
 
-        return self._start_response(game)
+        return self._start_response(
+            game,
+            daily_stage=stage_index,
+        )
 
-    def _start_response(self, game: StoredGame) -> StartGameResponse:
+    def _start_response(
+        self, game: StoredGame, daily_stage: int | None = None
+    ) -> StartGameResponse:
         return StartGameResponse(
             game_id=game.game_id,
             mode=game.mode,
             config=self.config,
             preset=self._preset_summary(game.preset_key),
             puzzle_key=game.puzzle_key,
+            daily_stage=daily_stage,
         )
 
     def _terminal_deception(
@@ -706,6 +926,7 @@ class GameService:
             status,
             now,
         )
+        self._finish_daily_stage(connection, game, status, now)
         self.repository.resolve_guess_timer(
             connection,
             game.game_id,
@@ -740,7 +961,10 @@ class GameService:
         )
 
     def expire_timer(
-        self, device_id: str, game_id: str
+        self,
+        device_id: str,
+        game_id: str,
+        continuation_token: str | None = None,
     ) -> TimedOutResponse:
         now = self.now()
         with self.repository.transaction() as connection:
@@ -748,6 +972,14 @@ class GameService:
             if game is None or game.device_id != device_id:
                 raise DomainError(
                     404, "GAME_NOT_FOUND", "That game could not be found."
+                )
+            if game.mode == "daily":
+                self._daily_stage_access(
+                    connection,
+                    game,
+                    continuation_token,
+                    now,
+                    bind_if_ready=False,
                 )
             game, schedules = self._ensure_current_rules(
                 connection, game, now
@@ -820,7 +1052,11 @@ class GameService:
             )
 
     def submit_guess(
-        self, device_id: str, game_id: str, raw_guess: str
+        self,
+        device_id: str,
+        game_id: str,
+        raw_guess: str,
+        continuation_token: str | None = None,
     ) -> AttemptResponse:
         now = self.now()
         with self.repository.transaction() as connection:
@@ -832,6 +1068,15 @@ class GameService:
             if game.status != "playing":
                 raise DomainError(
                     409, "GAME_FINISHED", "This game has already finished."
+                )
+
+            if game.mode == "daily":
+                self._daily_stage_access(
+                    connection,
+                    game,
+                    continuation_token,
+                    now,
+                    bind_if_ready=False,
                 )
 
             game, schedules = self._ensure_current_rules(
@@ -905,8 +1150,18 @@ class GameService:
                     ) from error
                 raise DomainError(400, error.code, error.message) from error
 
+            if game.mode == "daily":
+                self._daily_stage_access(
+                    connection,
+                    game,
+                    continuation_token,
+                    now,
+                    bind_if_ready=True,
+                )
+
             truth_feedback = self.engine.evaluate(guess, game.answer)
             display_feedback = truth_feedback
+            deception_reason: StoredDeceptionReason = "not_scheduled"
             prior_guesses = self.repository.list_guesses(
                 connection, game_id
             )
@@ -982,33 +1237,13 @@ class GameService:
                     time_budget_ms=self.settings.deception_decision_budget_ms,
                 )
                 display_feedback = decision.feedback
+                deception_reason = decision.reason
                 if is_correct and decision.activated:
                     status = "playing"
-
-            if game.mode == "daily":
-                if game.puzzle_key is None:
-                    raise DomainError(
-                        503,
-                        "SERVICE_UNAVAILABLE",
-                        "The Daily game is missing its puzzle key.",
-                    )
-                daily_attempt = self.repository.get_daily_attempt(
-                    connection, device_id, game.puzzle_key
-                )
-                if daily_attempt is None or daily_attempt.game_id != game_id:
-                    raise DomainError(
-                        503,
-                        "SERVICE_UNAVAILABLE",
-                        "The Daily attempt state is unavailable.",
-                    )
-                if daily_attempt.consumed_at is None:
-                    self.repository.consume_daily_attempt(
-                        connection,
-                        device_id,
-                        game.puzzle_key,
-                        game_id,
-                        now,
-                    )
+            elif schedule is not None and attempt >= MAX_GUESSES:
+                deception_reason = "final_guess"
+            elif schedule is not None and is_correct:
+                deception_reason = "winning_guess"
 
             self.repository.record_guess(
                 connection,
@@ -1017,9 +1252,11 @@ class GameService:
                 guess,
                 truth_feedback,
                 display_feedback,
+                deception_reason,
                 status,
                 now,
             )
+            self._finish_daily_stage(connection, game, status, now)
             timer_update = None
             if timer_active:
                 self.repository.resolve_guess_timer(
@@ -1054,6 +1291,18 @@ class GameService:
             if blackout_activates:
                 self.repository.activate_blackout(connection, game_id, now)
                 blackout_update = ActivatedBlackout(state="activated")
+            intrusion_placement = (
+                intrusion_for_attempt(blueprint, attempt)
+                if blueprint is not None and status == "playing"
+                else None
+            )
+            intrusion_update = (
+                ActivatedIntrusion(
+                    state="activated", placement=intrusion_placement
+                )
+                if intrusion_placement is not None
+                else None
+            )
             reverse_entry_update = None
             if reverse_entry_active:
                 can_rearm = (
@@ -1131,4 +1380,5 @@ class GameService:
             reverse_entry=reverse_entry_update,
             timer=timer_update,
             blackout=blackout_update,
+            intrusion=intrusion_update,
         )

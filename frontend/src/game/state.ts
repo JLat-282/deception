@@ -1,5 +1,6 @@
 import type {
   ActivatedGuessTimer,
+  ActivatedIntrusion,
   AttemptResponse,
   BootstrapResponse,
   GameMode,
@@ -19,6 +20,7 @@ export type AppPhase =
   | "revealing"
   | "blackoutClosing"
   | "blackoutOpening"
+  | "intrusion"
   | "won"
   | "lost"
   | "error";
@@ -42,6 +44,7 @@ export type AppState = {
   timerActive: ActivatedGuessTimer | null;
   pendingTimer: ActivatedGuessTimer | null;
   blackoutCutoffAttempt: number | null;
+  intrusionActive: ActivatedIntrusion | null;
   announcement: string;
 };
 
@@ -65,6 +68,7 @@ export type Action =
   | { type: "REVEAL_COMPLETE" }
   | { type: "BLACKOUT_COVERED" }
   | { type: "BLACKOUT_COMPLETE" }
+  | { type: "DISMISS_INTRUSION" }
   | {
       type: "FAILURE";
       scope: ErrorScope;
@@ -86,6 +90,7 @@ export const initialState: AppState = {
   timerActive: null,
   pendingTimer: null,
   blackoutCutoffAttempt: null,
+  intrusionActive: null,
   announcement: "",
 };
 
@@ -142,6 +147,7 @@ export function reducer(state: AppState, action: Action): AppState {
         timerActive: null,
         pendingTimer: null,
         blackoutCutoffAttempt: null,
+        intrusionActive: null,
         announcement: "",
       };
     case "TYPE_LETTER":
@@ -265,6 +271,17 @@ export function reducer(state: AppState, action: Action): AppState {
           blackoutCutoffAttempt: null,
         };
       }
+      if (isTimedOut(latest) && state.intrusionActive) {
+        return {
+          ...state,
+          phase: "intrusion",
+          message: "",
+          timerActive: state.pendingTimer,
+          pendingTimer: null,
+          announcement:
+            "Intrusion remains active. Dismiss it before continuing.",
+        };
+      }
       if (!isTimedOut(latest) && latest.blackout?.state === "activated") {
         return {
           ...state,
@@ -275,16 +292,30 @@ export function reducer(state: AppState, action: Action): AppState {
           pendingTimer: state.pendingTimer,
         };
       }
+      const reverseEntryActive =
+        !isTimedOut(latest) &&
+        (latest.reverseEntry?.state === "activated" ||
+          latest.reverseEntry?.state === "continued")
+          ? true
+          : state.reverseEntryActive;
+      if (!isTimedOut(latest) && latest.intrusion?.state === "activated") {
+        return {
+          ...state,
+          phase: "intrusion",
+          message: "",
+          reverseEntryActive,
+          timerActive: state.pendingTimer,
+          pendingTimer: null,
+          intrusionActive: latest.intrusion,
+          announcement:
+            "Intrusion. Dismiss the interruption before continuing.",
+        };
+      }
       return {
         ...state,
         phase: "ready",
         message: "",
-        reverseEntryActive:
-          !isTimedOut(latest) &&
-          (latest.reverseEntry?.state === "activated" ||
-            latest.reverseEntry?.state === "continued")
-            ? true
-            : state.reverseEntryActive,
+        reverseEntryActive,
         timerActive: state.pendingTimer,
         pendingTimer: null,
       };
@@ -310,6 +341,23 @@ export function reducer(state: AppState, action: Action): AppState {
           (latest.reverseEntry?.state === "activated" ||
             latest.reverseEntry?.state === "continued"),
       );
+      if (
+        latest &&
+        !isTimedOut(latest) &&
+        latest.intrusion?.state === "activated"
+      ) {
+        return {
+          ...state,
+          phase: "intrusion",
+          message: "",
+          reverseEntryActive,
+          timerActive: state.pendingTimer,
+          pendingTimer: null,
+          intrusionActive: latest.intrusion,
+          announcement:
+            "Intrusion. Dismiss the interruption before continuing.",
+        };
+      }
       return {
         ...state,
         phase: "ready",
@@ -319,6 +367,14 @@ export function reducer(state: AppState, action: Action): AppState {
         pendingTimer: null,
       };
     }
+    case "DISMISS_INTRUSION":
+      if (!state.intrusionActive) return state;
+      return {
+        ...state,
+        phase: state.phase === "intrusion" ? "ready" : state.phase,
+        intrusionActive: null,
+        announcement: "Intrusion dismissed. Play can continue.",
+      };
     case "FAILURE":
       if (action.scope === "guess" && action.recoverable !== true) {
         return {

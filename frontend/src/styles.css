@@ -203,25 +203,53 @@ button:disabled {
 }
 
 .mode-option {
+  --mode-accent: var(--violet-deep);
+
+  position: relative;
   display: flex;
-  min-height: 360px;
+  min-height: 410px;
   padding: clamp(1.75rem, 3vw, 2.25rem);
   flex-direction: column;
   align-items: center;
   color: var(--text-muted);
   border: 1px solid;
   border-radius: var(--radius-md);
-  background: rgb(12 10 14 / 82%);
+  overflow: hidden;
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--mode-accent) 15%, transparent),
+      transparent 48%
+    ),
+    rgb(12 10 14 / 94%);
   box-shadow: var(--shadow-panel);
   text-align: center;
 }
 
 .mode-option--daily {
+  --mode-accent: var(--crimson);
+
   border-color: var(--crimson);
+  background:
+    linear-gradient(145deg, rgb(114 42 139 / 17%), transparent 38%),
+    linear-gradient(215deg, rgb(225 37 65 / 15%), transparent 48%),
+    rgb(12 10 14 / 94%);
 }
 
 .mode-option--practice {
+  --mode-accent: var(--violet);
+
   border-color: var(--violet-deep);
+}
+
+.mode-option::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  content: "";
+  background: var(--mode-accent);
 }
 
 .mode-option h2 {
@@ -265,6 +293,69 @@ button:disabled {
 .mode-option .mode-lead {
   color: var(--text);
   font-size: 1.16rem;
+}
+
+.descent-path {
+  display: grid;
+  width: 100%;
+  margin: 1.25rem 0 1.5rem;
+  padding: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+}
+
+.descent-path__stage {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.4rem;
+  color: var(--text-dim);
+}
+
+.descent-path__stage:not(:last-child)::after {
+  position: absolute;
+  top: 0.83rem;
+  left: calc(50% + 1rem);
+  width: calc(100% - 2rem);
+  height: 1px;
+  content: "";
+  background: var(--border);
+}
+
+.descent-path__stage span {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: #0c0a0e;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.descent-path__stage small {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.descent-path__stage--current {
+  color: var(--crimson);
+}
+
+.descent-path__stage--current span {
+  box-shadow: 0 0 0 3px rgb(225 37 65 / 16%);
+}
+
+.descent-path__stage--cleared {
+  color: var(--violet);
+}
+
+.descent-path__stage--cleared:not(:last-child)::after {
+  background: var(--violet-deep);
 }
 
 .mode-button {
@@ -612,6 +703,135 @@ button:disabled {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.intrusion-shield {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  width: 100vw;
+  min-width: 320px;
+  height: 100dvh;
+  place-items: center;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgb(210 45 72 / 4%) 0,
+      rgb(210 45 72 / 4%) 1px,
+      transparent 1px,
+      transparent 5px
+    ),
+    radial-gradient(circle at 50% 48%, rgb(168 21 47 / 18%), transparent 38%),
+    rgb(5 5 7 / 98.5%);
+  pointer-events: auto;
+  animation: intrusion-screen-in 220ms steps(2, end) both;
+}
+
+.intrusion-panel {
+  position: relative;
+  display: flex;
+  width: min(880px, calc(100% - 2rem));
+  min-height: min(62dvh, 620px);
+  padding: clamp(2rem, 7vw, 5rem) 1.25rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-block: 1px solid rgb(210 45 72 / 66%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(18 8 14 / 72%),
+    transparent
+  );
+  color: var(--text);
+  text-align: center;
+}
+
+.intrusion-panel::before,
+.intrusion-panel::after {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgb(210 45 72 / 45%);
+  content: "";
+}
+
+.intrusion-panel::before {
+  top: 26%;
+}
+
+.intrusion-panel::after {
+  bottom: 24%;
+}
+
+.intrusion-signal {
+  color: var(--danger);
+  font-size: clamp(0.7rem, 1.4vw, 0.9rem);
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.intrusion-panel h2 {
+  margin: 0.3rem 0 0;
+  color: var(--text);
+  font-family: "Cormorant Garamond", serif;
+  font-size: clamp(4rem, 13vw, 9rem);
+  line-height: 0.95;
+}
+
+.intrusion-panel p {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: clamp(1rem, 2vw, 1.25rem);
+}
+
+.intrusion-dismiss {
+  position: fixed;
+  z-index: 102;
+  left: 50%;
+  top: 72%;
+  min-width: 8rem;
+  min-height: 44px;
+  padding: 0.75rem 1.4rem;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--danger);
+  background: var(--crimson-deep);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 55%);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition:
+    left 650ms cubic-bezier(0.45, 0, 0.55, 1),
+    top 650ms cubic-bezier(0.45, 0, 0.55, 1),
+    background-color 120ms ease;
+}
+
+.intrusion-dismiss:hover {
+  background: var(--crimson);
+}
+
+.intrusion-dismiss:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+@keyframes intrusion-screen-in {
+  0% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 0.62;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 .guess-timer {
@@ -1441,7 +1661,7 @@ button:disabled {
   }
 
   .mode-option {
-    min-height: 360px;
+    min-height: 390px;
   }
 
   .difficulty-grid {

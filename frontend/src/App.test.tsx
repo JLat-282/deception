@@ -9,6 +9,9 @@ const bootstrap = {
     puzzleKey: "2026-07-28",
     availability: "available",
     resetAt: "2026-07-29T03:00:00Z",
+    status: "unstarted",
+    currentStage: 1,
+    clearedStages: 0,
   },
   presets: [
     {
@@ -47,10 +50,10 @@ const bootstrap = {
 };
 
 async function startPractice(): Promise<void> {
-  fireEvent.click(await screen.findByRole("button", { name: "Play Practice" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Play Infinite" }));
   fireEvent.click(
     await screen.findByRole("button", {
-      name: "Play Practice on Doubt II",
+      name: "Play Infinite on Doubt II",
     }),
   );
 }
@@ -99,14 +102,14 @@ describe("App", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("Connecting…");
     resolveBootstrap(jsonResponse(bootstrap));
-    await screen.findByRole("button", { name: "Play Daily" });
+    await screen.findByRole("button", { name: "Begin Descent" });
   });
 
   it("renders the mode screen without serious accessibility violations", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(bootstrap));
     const { container } = render(<App />);
 
-    await screen.findByRole("button", { name: "Play Daily" });
+    await screen.findByRole("button", { name: "Begin Descent" });
     const results = await axe.run(container, {
       rules: { "color-contrast": { enabled: false } },
     });

@@ -17,6 +17,7 @@ from .repository import Repository
 from .schemas import (
     AttemptResponse,
     BootstrapResponse,
+    ContinuationRequest,
     ErrorBody,
     ErrorResponse,
     GuessRequest,
@@ -145,6 +146,7 @@ def create_app(
             device_id_for(request, response),
             payload.mode,
             payload.preset_key,
+            payload.continuation_token,
         )
 
     @app.post(
@@ -160,7 +162,10 @@ def create_app(
         response: Response,
     ) -> AttemptResponse:
         return service.submit_guess(
-            device_id_for(request, response), game_id, payload.guess
+            device_id_for(request, response),
+            game_id,
+            payload.guess,
+            payload.continuation_token,
         )
 
     @app.post(
@@ -173,9 +178,12 @@ def create_app(
         game_id: str,
         request: Request,
         response: Response,
+        payload: ContinuationRequest | None = None,
     ) -> TimedOutResponse:
         return service.expire_timer(
-            device_id_for(request, response), game_id
+            device_id_for(request, response),
+            game_id,
+            payload.continuation_token if payload is not None else None,
         )
 
     @app.get(

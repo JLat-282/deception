@@ -52,8 +52,10 @@ export function HowDeceptionWorks({
             <section>
               <h3>Modes</h3>
               <p>
-                Daily: one shared word, one attempt. Practice: a fresh word
-                every game, replay anytime, with your choice of difficulty.
+                Daily Descent is a four-stage run from Doubt I through
+                Deception. Clear a stage to descend; one loss ends the run.
+                Infinite starts a fresh word every game and lets you choose any
+                difficulty.
               </p>
             </section>
             <section>
@@ -92,6 +94,13 @@ export function HowDeceptionWorks({
               <strong>Blackout</strong>
               <span>
                 Earlier feedback disappears, and the keyboard starts over.
+              </span>
+            </li>
+            <li>
+              <strong>Intrusion</strong>
+              <span>
+                The screen is blocked until you catch and dismiss the
+                interruption.
               </span>
             </li>
           </ul>

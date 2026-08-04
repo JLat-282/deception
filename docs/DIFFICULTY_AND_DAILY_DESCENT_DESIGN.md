@@ -105,6 +105,7 @@ silently change active games.
 | Guess Timer | At most once | At most once | May repeat | May repeat |
 | Reverse Entry | At most once | At most once | May repeat | May repeat |
 | Blackout | Disabled | At most once | At most once | At most once |
+| Intrusion | Disabled | May repeat | May repeat | May repeat |
 | Same-attempt combinations | None | None | Limited allowlist | Broad allowlist |
 | Quiet-blueprint risk | Allowed only inside the approachable envelope | Low | Not allowed | Not allowed |
 
@@ -121,6 +122,7 @@ silently change active games.
 | Maximum Reverse events | 1 | 1 | 2 | 3 |
 | Blackout chance | Disabled | 20% | 45% | 80% |
 | Blackout maximum | 0 | 1 | 1 | 1 |
+| Intrusion chance per accepted row (2-5) | 0% | 10% | 30% | 60% |
 
 The existing four-or-five-displayed-gray trigger remains eligible at every
 preset independently of the fallback probability.
@@ -139,6 +141,11 @@ Version 1 compatibility rules:
   three from the same completed guess. A Timer begins after the curtain reopens.
   Timer may repeat on adjacent attempts but never on three consecutive attempts.
   Reverse Entry may repeat on consecutive attempts.
+- Intrusion is rolled independently after each accepted, non-winning guess on
+  attempts two through five. It has no per-game cap and may repeat on
+  consecutive attempts. It takes over the screen until its moving Dismiss
+  control is activated, but an active Timer continues. When Intrusion and
+  Blackout share a row, the curtain completes before Intrusion appears.
 
 These numbers are hypotheses for playtesting rather than permanent balance
 promises. Any change creates a new preset version.
@@ -153,6 +160,8 @@ Interpretation notes:
   full-row recolors.
 - Timer and Reverse Entry can appear multiple times in Doubt III and Deception.
 - Repeated Blackout is prohibited even at the highest difficulty.
+- Repeated Intrusion is allowed; its uncertainty comes from a fresh,
+  deterministic per-row roll rather than a preannounced event count.
 - False Victory is independently enabled in 5% of Deception blueprints. It can
   reject one correct answer only on a scheduled lie row from attempts two through
   four, requires a plausible mutation, and permanently protects later submissions
@@ -576,14 +585,15 @@ stage outcome storage is required earlier.
 - Adding a future punishment requires extending preset data and compatibility rules,
   not rewriting scheduling control flow.
 
-## Implementation Readiness Gate
+## Implementation Status
 
-Milestones 0 through 2 are complete for Practice. The approved version 1 matrix
-is the implementation specification for the preset registry, and all four
-difficulties are executable. Deception remains Practice-only until Daily Descent
-is implemented.
+Milestones 0 through 3 are complete. The approved version 1 matrix is the
+implementation specification for the preset registry, all four difficulties are
+executable in Infinite, and Daily Descent persists its four-stage run through
+checkpoints, failure, forfeiture, completion, and the 03:00 UTC reset.
 
 ## Next Workshop Assignment
 
-Playtest Deception's broad overlap and rare False Victory recovery, then begin
-Daily Descent using the four existing versioned presets.
+Playtest the full Daily Descent, focusing on stage-to-stage pacing, whether the
+checkpoint decision feels meaningful, and whether failure at later stages feels
+earned. Calibration and future competition remain Milestone 4 work.

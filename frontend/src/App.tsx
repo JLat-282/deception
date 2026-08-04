@@ -15,6 +15,7 @@ import { GameBoard } from "./components/GameBoard";
 import { GameResult } from "./components/GameResult";
 import { GuessTimer } from "./components/GuessTimer";
 import { HowDeceptionWorks } from "./components/HowDeceptionWorks";
+import { Intrusion } from "./components/Intrusion";
 import { Keyboard } from "./components/Keyboard";
 import { ModeSelect } from "./components/ModeSelect";
 import { PracticeDifficultySelect } from "./components/PracticeDifficultySelect";
@@ -60,12 +61,13 @@ export default function App() {
   const [firstVisitGuide, setFirstVisitGuide] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
   const [reverseNoticeVisible, setReverseNoticeVisible] = useState(false);
-  const [practiceSelectOpen, setPracticeSelectOpen] = useState(false);
+  const [infiniteSelectOpen, setInfiniteSelectOpen] = useState(false);
   const [startingPresetKey, setStartingPresetKey] = useState<string | null>(
     null,
   );
   const guideCheckComplete = useRef(false);
-  const practiceButtonRef = useRef<HTMLButtonElement>(null);
+  const infiniteButtonRef = useRef<HTMLButtonElement>(null);
+  const dailyContinuationToken = useRef<string | null>(null);
 
   const closeHelp = useCallback(() => {
     setHelpOpen(false);
@@ -114,8 +116,13 @@ export default function App() {
     setStartingPresetKey(presetKey ?? null);
     dispatch({ type: "STARTING", mode });
     try {
-      const session = await api.startGame(mode, presetKey);
-      setPracticeSelectOpen(false);
+      const continuationToken =
+        mode === "daily" ? crypto.randomUUID() : undefined;
+      if (mode === "daily") {
+        dailyContinuationToken.current = continuationToken ?? null;
+      }
+      const session = await api.startGame(mode, presetKey, continuationToken);
+      setInfiniteSelectOpen(false);
       dispatch({ type: "START_SUCCESS", payload: session });
     } catch (error) {
       dispatch({
@@ -144,7 +151,13 @@ export default function App() {
     const revealWindow = waitForRevealStart();
     try {
       const [result] = await Promise.all([
-        api.submitGuess(state.session.gameId, state.currentGuess),
+        api.submitGuess(
+          state.session.gameId,
+          state.currentGuess,
+          state.session.mode === "daily"
+            ? (dailyContinuationToken.current ?? undefined)
+            : undefined,
+        ),
         revealWindow,
       ]);
       dispatch({
@@ -166,7 +179,12 @@ export default function App() {
     if (!state.session || !state.timerActive) return;
     dispatch({ type: "TIMER_EXPIRING" });
     try {
-      const result = await api.expireTimer(state.session.gameId);
+      const result = await api.expireTimer(
+        state.session.gameId,
+        state.session.mode === "daily"
+          ? (dailyContinuationToken.current ?? undefined)
+          : undefined,
+      );
       dispatch({ type: "TIMEOUT_SUCCESS", payload: result });
     } catch (error) {
       dispatch({
@@ -319,7 +337,7 @@ export default function App() {
     state.bootstrap
   ) {
     const startError = state.phase === "error" ? state.message : undefined;
-    if (practiceSelectOpen) {
+    if (infiniteSelectOpen) {
       return (
         <>
           <PracticeDifficultySelect
@@ -328,9 +346,9 @@ export default function App() {
             selectedPresetKey={startingPresetKey}
             message={startError}
             onBack={() => {
-              setPracticeSelectOpen(false);
+              setInfiniteSelectOpen(false);
               window.requestAnimationFrame(() =>
-                practiceButtonRef.current?.focus(),
+                infiniteButtonRef.current?.focus(),
               );
             }}
             onHelp={openHelp}
@@ -352,9 +370,9 @@ export default function App() {
           busy={state.phase === "starting"}
           message={state.phase === "error" ? state.message : undefined}
           onStart={(mode) => void startGame(mode)}
-          onPractice={() => setPracticeSelectOpen(true)}
+          onInfinite={() => setInfiniteSelectOpen(true)}
           onHelp={openHelp}
-          practiceButtonRef={practiceButtonRef}
+          infiniteButtonRef={infiniteButtonRef}
         />
         {helpOpen ? (
           <HowDeceptionWorks expandAll={firstVisitGuide} onClose={closeHelp} />
@@ -375,6 +393,7 @@ export default function App() {
     state.phase === "revealing" ||
     state.phase === "blackoutClosing" ||
     state.phase === "blackoutOpening" ||
+    state.phase === "intrusion" ||
     finished ||
     state.phase === "error";
 
@@ -382,21 +401,18 @@ export default function App() {
     <main className="game-screen">
       <BrandHeader
         mode={state.session.mode}
-        presetName={
-          state.session.mode === "practice"
-            ? state.session.preset.name
-            : undefined
-        }
+        presetName={state.session.preset.name}
         helpDisabled={
           state.timerActive !== null ||
           state.phase === "blackoutClosing" ||
-          state.phase === "blackoutOpening"
+          state.phase === "blackoutOpening" ||
+          state.phase === "intrusion"
         }
         timer={
           state.timerActive ? (
             <GuessTimer
               timer={state.timerActive}
-              enabled={state.phase === "ready"}
+              enabled={state.phase === "ready" || state.phase === "intrusion"}
               onExpire={() => void expireTimer()}
             />
           ) : undefined
@@ -404,6 +420,7 @@ export default function App() {
         onReturn={() => {
           setHelpOpen(false);
           setResultOpen(false);
+          dailyContinuationToken.current = null;
           void loadBootstrap();
         }}
         onHelp={openHelp}
@@ -434,6 +451,12 @@ export default function App() {
                 : null
             }
           />
+          {state.intrusionActive ? (
+            <Intrusion
+              intrusion={state.intrusionActive}
+              onDismiss={() => dispatch({ type: "DISMISS_INTRUSION" })}
+            />
+          ) : null}
         </div>
 
         <div className="game-status-line">
@@ -509,12 +532,15 @@ export default function App() {
             answer={latest.answer}
             attempt={latest.attempt}
             deception={latest.deception}
+            dailyStage={state.session.dailyStage}
             onClose={closeResult}
-            onPractice={() => {
+            onInfinite={() => {
               void startGame("practice", replayPresetKey);
             }}
+            onDescend={() => void startGame("daily")}
             onModes={() => {
               setResultOpen(false);
+              dailyContinuationToken.current = null;
               void loadBootstrap();
             }}
           />

@@ -37,10 +37,10 @@ const presets = [
 ];
 
 async function startPractice(page: Page, preset = "Doubt II") {
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await page.getByRole("button", { name: "Play Infinite" }).click();
   await page
     .getByRole("button", {
-      name: `Play Practice on ${preset}`,
+      name: `Play Infinite on ${preset}`,
       exact: true,
     })
     .click();
@@ -50,6 +50,42 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("deception-guide-seen-v1", "true");
   });
+});
+
+test("Daily Descent and Infinite form the primary mode choice", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "Daily Descent" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Infinite" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Begin Descent" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Play Infinite" }),
+  ).toBeEnabled();
+  await expect(page.getByText("Doubt I", { exact: true })).toBeVisible();
+  await expect(page.getByText("Deception", { exact: true })).toBeVisible();
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  const serious = accessibility.violations.filter((violation) =>
+    ["serious", "critical"].includes(violation.impact ?? ""),
+  );
+  expect(serious).toEqual([]);
+
+  if (process.env.DECEPTION_CAPTURE_HOME === "true") {
+    await page.screenshot({
+      path: `../.qa/daily-descent-${testInfo.project.name}.png`,
+      fullPage: true,
+    });
+  }
 });
 
 test("practice can be solved with the physical keyboard", async ({ page }) => {
@@ -80,11 +116,11 @@ test("practice can be solved with the physical keyboard", async ({ page }) => {
   expect(serious).toEqual([]);
 });
 
-test("Deception can be selected for Practice", async ({ page }) => {
+test("Deception can be selected for Infinite", async ({ page }) => {
   await page.goto("/");
   await startPractice(page, "Deception");
 
-  await expect(page.getByText("Practice · Deception")).toBeVisible();
+  await expect(page.getByText("Infinite · Deception")).toBeVisible();
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 });
 
@@ -185,7 +221,7 @@ test("invalid Daily guess does not consume, valid guess does", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Daily" }).click();
+  await page.getByRole("button", { name: "Begin Descent" }).click();
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
   await page.keyboard.type("zzzzz");
@@ -195,8 +231,10 @@ test("invalid Daily guess does not consume, valid guess does", async ({
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Return to modes" }).click();
-  await expect(page.getByRole("button", { name: "Play Daily" })).toBeEnabled();
-  await page.getByRole("button", { name: "Play Daily" }).click();
+  await expect(
+    page.getByRole("button", { name: "Begin Descent" }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Begin Descent" }).click();
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
   for (let index = 0; index < 5; index += 1) {
@@ -207,9 +245,11 @@ test("invalid Daily guess does not consume, valid guess does", async ({
   await expect(page.getByText("1 of 6 guesses")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("button", { name: "Daily Used" })).toBeDisabled();
   await expect(
-    page.getByRole("button", { name: "Play Practice" }),
+    page.getByRole("button", { name: "Descent Ended" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Play Infinite" }),
   ).toBeEnabled();
 });
 
@@ -274,15 +314,17 @@ test("focus order and reduced-motion reveal remain usable", async ({
     page.getByRole("button", { name: "Open Deception Guide" }),
   ).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Play Daily" })).toBeFocused();
+  await expect(
+    page.getByRole("button", { name: "Begin Descent" }),
+  ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(
-    page.getByRole("button", { name: "Play Practice" }),
+    page.getByRole("button", { name: "Play Infinite" }),
   ).toBeFocused();
   await page.keyboard.press("Enter");
   await page
     .getByRole("button", {
-      name: "Play Practice on Doubt II",
+      name: "Play Infinite on Doubt II",
       exact: true,
     })
     .click();
@@ -318,6 +360,9 @@ test("Blackout closes after row reveal and erases accumulated feedback", async (
           puzzleKey: "2026-07-28",
           availability: "available",
           resetAt: "2026-07-29T03:00:00Z",
+          status: "unstarted",
+          currentStage: 1,
+          clearedStages: 0,
         },
         presets,
       },
@@ -383,4 +428,114 @@ test("Blackout closes after row reveal and erases accumulated feedback", async (
       fullPage: true,
     });
   }
+});
+
+test("Intrusion blocks play without pausing an active Timer", async ({
+  page,
+}) => {
+  let attempt = 0;
+  await page.route("**/api/bootstrap", (route) =>
+    route.fulfill({
+      json: {
+        config: { wordLength: 5, maxGuesses: 6 },
+        daily: {
+          puzzleKey: "2026-07-28",
+          availability: "available",
+          resetAt: "2026-07-29T03:00:00Z",
+          status: "unstarted",
+          currentStage: 1,
+          clearedStages: 0,
+        },
+        presets,
+      },
+    }),
+  );
+  await page.route("**/api/games", (route) =>
+    route.fulfill({
+      json: {
+        gameId: "intrusion-game",
+        mode: "practice",
+        config: { wordLength: 5, maxGuesses: 6 },
+        preset: presets[2],
+      },
+    }),
+  );
+  await page.route("**/api/games/intrusion-game/guesses", (route) => {
+    attempt += 1;
+    const now = Date.now();
+    route.fulfill({
+      json: {
+        guess: attempt === 1 ? "slate" : "fight",
+        feedback: "BBBBB",
+        attempt,
+        status: "playing",
+        ...(attempt === 2
+          ? {
+              intrusion: { state: "activated", placement: "lowerRight" },
+              timer: {
+                state: "activated",
+                durationSeconds: 30,
+                startsAt: new Date(now).toISOString(),
+                deadlineAt: new Date(now + 30_000).toISOString(),
+              },
+            }
+          : {}),
+      },
+    });
+  });
+
+  await page.goto("/");
+  await startPractice(page, "Doubt III");
+  for (const [index, guess] of ["slate", "fight"].entries()) {
+    await page.keyboard.type(guess);
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(`${index + 1} of 6 guesses`)).toBeVisible();
+    if (index === 0) {
+      await expect(
+        page.getByRole("button", { name: "Enter", exact: true }),
+      ).toBeEnabled();
+    }
+  }
+
+  const intrusion = page.getByRole("dialog", { name: "Intrusion" });
+  await expect(intrusion).toBeVisible();
+  const shield = page.locator(".intrusion-shield");
+  const shieldBounds = await shield.boundingBox();
+  const viewport = page.viewportSize();
+  expect(shieldBounds?.width).toBe(viewport?.width);
+  expect(shieldBounds?.height).toBe(viewport?.height);
+  if (process.env.DECEPTION_CAPTURE_INTRUSION === "true") {
+    await page.screenshot({
+      path: "../output/playwright/intrusion.png",
+      fullPage: true,
+    });
+  }
+  const dismiss = page.getByRole("button", { name: "Dismiss" });
+  await expect(dismiss).toBeFocused();
+  const dismissBefore = await dismiss.boundingBox();
+  const aKey = page.locator(".keyboard button").filter({ hasText: /^A$/ });
+  await expect(aKey).toBeDisabled();
+  const timer = page.locator(".guess-timer");
+  const before = await timer.getAttribute("aria-label");
+  await page.waitForTimeout(1_100);
+  const after = await timer.getAttribute("aria-label");
+  const dismissAfter = await dismiss.boundingBox();
+  expect(after).not.toBe(before);
+  expect(dismissAfter).not.toEqual(dismissBefore);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Enter");
+  await expect(intrusion).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  const serious = accessibility.violations.filter((violation) =>
+    ["serious", "critical"].includes(violation.impact ?? ""),
+  );
+  expect(serious).toEqual([]);
+
+  await dismiss.evaluate((button: HTMLButtonElement) => button.click());
+  await expect(intrusion).toBeHidden();
+  await expect(aKey).toBeEnabled();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
 });

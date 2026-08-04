@@ -80,6 +80,9 @@ def test_legacy_migration_is_serialized_across_initializers(
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(games)")
         }
+        guess_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(guesses)")
+        }
         schedule_table = connection.execute(
             """
             SELECT name FROM sqlite_master
@@ -106,4 +109,5 @@ def test_legacy_migration_is_serialized_across_initializers(
     assert blackout_table == ("blackout_states",)
     assert "preset_key" in columns
     assert "blueprint_json" in columns
-    assert schema_version == 7
+    assert "deception_reason" in guess_columns
+    assert schema_version == 10

@@ -7,9 +7,9 @@ type ModeSelectProps = {
   busy: boolean;
   message?: string;
   onStart: (mode: GameMode) => void;
-  onPractice: () => void;
+  onInfinite: () => void;
   onHelp: () => void;
-  practiceButtonRef?: Ref<HTMLButtonElement>;
+  infiniteButtonRef?: Ref<HTMLButtonElement>;
 };
 
 export function ModeSelect({
@@ -17,11 +17,20 @@ export function ModeSelect({
   busy,
   message,
   onStart,
-  onPractice,
+  onInfinite,
   onHelp,
-  practiceButtonRef,
+  infiniteButtonRef,
 }: ModeSelectProps) {
-  const dailyUsed = daily.availability === "used";
+  const dailyEnded = ["failed", "forfeited", "completed", "expired"].includes(
+    daily.status,
+  );
+  const stageNames = ["Doubt I", "Doubt II", "Doubt III", "Deception"];
+  const nextAction =
+    daily.currentStage === 4
+      ? "Enter Deception"
+      : `Descend to ${stageNames[daily.currentStage - 1]}`;
+  const dailyAction =
+    daily.status === "checkpoint" ? nextAction : "Begin Descent";
 
   return (
     <main className="mode-screen">
@@ -35,28 +44,67 @@ export function ModeSelect({
 
       <section className="mode-options" aria-label="Choose a game mode">
         <article className="mode-option mode-option--daily">
-          <h2>Daily</h2>
+          <h2>Daily Descent</h2>
           <div className="mode-divider" aria-hidden="true" />
-          {dailyUsed ? (
+          {daily.status === "completed" ? (
             <>
-              <p className="mode-lead">Today’s attempt has been used.</p>
+              <p className="mode-lead">You survived the full descent.</p>
+              <p>A new run begins after the daily reset.</p>
+            </>
+          ) : dailyEnded ? (
+            <>
+              <p className="mode-lead">Today’s descent has ended.</p>
+              <p>Infinite remains open while you wait for another run.</p>
+            </>
+          ) : daily.status === "checkpoint" ? (
+            <>
+              <p className="mode-lead">
+                {daily.clearedStages} of 4 stages cleared.
+              </p>
               <p>
-                Practice remains available while you wait for the next puzzle.
+                Your next stage is waiting. It starts with your first valid
+                guess.
               </p>
             </>
           ) : (
             <>
-              <p className="mode-lead">One answer. One attempt.</p>
-              <p>Your first valid guess starts it. Leaving forfeits it.</p>
+              <p className="mode-lead">Four stages. One uninterrupted run.</p>
+              <p>
+                Begin at Doubt I. Clear every word; one loss ends the descent.
+              </p>
             </>
           )}
+          <ol className="descent-path" aria-label="Daily Descent stages">
+            {stageNames.map((name, index) => {
+              const stage = index + 1;
+              const state =
+                stage <= daily.clearedStages
+                  ? "cleared"
+                  : stage === daily.currentStage && !dailyEnded
+                    ? "current"
+                    : "locked";
+              return (
+                <li
+                  className={`descent-path__stage descent-path__stage--${state}`}
+                  key={name}
+                >
+                  <span aria-hidden="true">{stage}</span>
+                  <small>{name}</small>
+                </li>
+              );
+            })}
+          </ol>
           <button
             className="mode-button mode-button--primary"
             type="button"
-            disabled={busy || dailyUsed}
+            disabled={busy || dailyEnded}
             onClick={() => onStart("daily")}
           >
-            {dailyUsed ? "Daily Used" : "Play Daily"}
+            {dailyEnded
+              ? daily.status === "completed"
+                ? "Descent Complete"
+                : "Descent Ended"
+              : dailyAction}
           </button>
           <p className="mode-note" title={daily.resetAt}>
             Next puzzle at 03:00 UTC
@@ -64,18 +112,18 @@ export function ModeSelect({
         </article>
 
         <article className="mode-option mode-option--practice">
-          <h2>Practice</h2>
+          <h2>Infinite</h2>
           <div className="mode-divider" aria-hidden="true" />
-          <p className="mode-lead">Unlimited games. No lives.</p>
-          <p>Each round starts with a fresh word.</p>
+          <p className="mode-lead">Fresh words. Unlimited runs.</p>
+          <p>Choose any difficulty and replay without waiting.</p>
           <button
             className="mode-button mode-button--practice"
-            ref={practiceButtonRef}
+            ref={infiniteButtonRef}
             type="button"
             disabled={busy}
-            onClick={onPractice}
+            onClick={onInfinite}
           >
-            Play Practice
+            Play Infinite
           </button>
           <p className="mode-note">Replay anytime</p>
         </article>

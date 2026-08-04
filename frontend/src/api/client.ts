@@ -83,18 +83,26 @@ function bootstrap(): Promise<BootstrapResponse> {
 
 export const api = {
   bootstrap,
-  startGame: (mode: GameMode, presetKey?: string) =>
+  startGame: (mode: GameMode, presetKey?: string, continuationToken?: string) =>
     request<StartGameResponse>("/api/games", {
       method: "POST",
-      body: JSON.stringify({ mode, ...(presetKey ? { presetKey } : {}) }),
+      body: JSON.stringify({
+        mode,
+        ...(presetKey ? { presetKey } : {}),
+        ...(continuationToken ? { continuationToken } : {}),
+      }),
     }),
-  submitGuess: (gameId: string, guess: string) =>
+  submitGuess: (gameId: string, guess: string, continuationToken?: string) =>
     request<AttemptResponse>(`/api/games/${gameId}/guesses`, {
       method: "POST",
-      body: JSON.stringify({ guess }),
+      body: JSON.stringify({
+        guess,
+        ...(continuationToken ? { continuationToken } : {}),
+      }),
     }),
-  expireTimer: (gameId: string) =>
+  expireTimer: (gameId: string, continuationToken?: string) =>
     request<TimedOutResponse>(`/api/games/${gameId}/timer/expire`, {
       method: "POST",
+      body: JSON.stringify(continuationToken ? { continuationToken } : {}),
     }),
 };

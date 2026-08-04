@@ -21,17 +21,20 @@ class APIModel(BaseModel):
 
 GameMode = Literal["daily", "practice"]
 GameStatus = Literal["playing", "won", "lost"]
+DailyRunStatus = Literal[
+    "unstarted",
+    "active",
+    "checkpoint",
+    "failed",
+    "forfeited",
+    "completed",
+    "expired",
+]
 
 
 class GameConfig(APIModel):
     word_length: int
     max_guesses: int
-
-
-class DailyInfo(APIModel):
-    puzzle_key: str
-    availability: Literal["available", "used"]
-    reset_at: datetime
 
 
 class DifficultyPresetSummary(APIModel):
@@ -43,6 +46,16 @@ class DifficultyPresetSummary(APIModel):
     available: bool
 
 
+class DailyInfo(APIModel):
+    puzzle_key: str
+    availability: Literal["available", "used"]
+    reset_at: datetime
+    status: DailyRunStatus
+    current_stage: int = Field(ge=1, le=4)
+    cleared_stages: int = Field(ge=0, le=4)
+    current_preset: DifficultyPresetSummary | None = None
+
+
 class BootstrapResponse(APIModel):
     config: GameConfig
     daily: DailyInfo
@@ -52,6 +65,7 @@ class BootstrapResponse(APIModel):
 class StartGameRequest(APIModel):
     mode: GameMode
     preset_key: str | None = None
+    continuation_token: str | None = Field(default=None, min_length=20, max_length=256)
 
 
 class StartGameResponse(APIModel):
@@ -60,10 +74,16 @@ class StartGameResponse(APIModel):
     config: GameConfig
     preset: DifficultyPresetSummary
     puzzle_key: str | None = None
+    daily_stage: int | None = Field(default=None, ge=1, le=4)
 
 
 class GuessRequest(APIModel):
     guess: str
+    continuation_token: str | None = Field(default=None, min_length=20, max_length=256)
+
+
+class ContinuationRequest(APIModel):
+    continuation_token: str | None = Field(default=None, min_length=20, max_length=256)
 
 
 FeedbackMarker = Literal["G", "Y", "B"]
@@ -127,6 +147,11 @@ class ActivatedBlackout(APIModel):
     state: Literal["activated"]
 
 
+class ActivatedIntrusion(APIModel):
+    state: Literal["activated"]
+    placement: Literal["upperLeft", "upperRight", "lowerLeft", "lowerRight"]
+
+
 class GuessResponse(APIModel):
     guess: str
     feedback: str
@@ -137,6 +162,7 @@ class GuessResponse(APIModel):
     reverse_entry: ReverseEntryUpdate | None = None
     timer: ActivatedGuessTimer | CompletedGuessTimer | None = None
     blackout: ActivatedBlackout | None = None
+    intrusion: ActivatedIntrusion | None = None
 
 
 class TimedOutResponse(APIModel):

@@ -55,14 +55,14 @@ describe("PracticeDifficultySelect", () => {
       screen.getByRole("heading", { name: "Choose your doubt" }),
     ).toHaveFocus();
     fireEvent.click(
-      screen.getByRole("button", { name: "Play Practice on Doubt II" }),
+      screen.getByRole("button", { name: "Play Infinite on Doubt II" }),
     );
     expect(onSelect).toHaveBeenCalledWith("doubt-2@1");
     expect(
-      screen.getByRole("button", { name: "Play Practice on Doubt III" }),
+      screen.getByRole("button", { name: "Play Infinite on Doubt III" }),
     ).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: "Play Practice on Deception" }),
+      screen.getByRole("button", { name: "Play Infinite on Deception" }),
     ).toBeEnabled();
   });
 

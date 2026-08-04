@@ -45,7 +45,7 @@ export function PracticeDifficultySelect({
           <span aria-hidden="true">←</span> Back to modes
         </button>
         <div className="difficulty-intro">
-          <p className="difficulty-eyebrow">Practice</p>
+          <p className="difficulty-eyebrow">Infinite</p>
           <h2 id="difficulty-heading" ref={headingRef} tabIndex={-1}>
             Choose your doubt
           </h2>
@@ -73,7 +73,7 @@ export function PracticeDifficultySelect({
                 disabled={busy || !preset.available}
                 aria-label={
                   preset.available
-                    ? `Play Practice on ${preset.name}`
+                    ? `Play Infinite on ${preset.name}`
                     : `${preset.name} unavailable`
                 }
                 aria-describedby={`${pressureId} ${descriptionId}`}
@@ -104,7 +104,7 @@ export function PracticeDifficultySelect({
         </div>
         <p className="visually-hidden" role="status" aria-live="polite">
           {busy && selectedPresetKey
-            ? `Preparing ${orderedPresets.find((preset) => preset.presetKey === selectedPresetKey)?.name ?? "Practice"}`
+            ? `Preparing ${orderedPresets.find((preset) => preset.presetKey === selectedPresetKey)?.name ?? "Infinite"}`
             : ""}
         </p>
       </section>

@@ -12,6 +12,12 @@ from .engine import MAX_GUESSES, WORD_LENGTH, TruthEngine
 
 FeedbackMarker = Literal["G", "Y", "B"]
 Tactic = Literal["fabricate", "hide"]
+DecisionReason = Literal[
+    "activated",
+    "deadline_expired",
+    "no_candidate",
+    "strategy_restricted",
+]
 
 
 @dataclass(frozen=True)
@@ -24,6 +30,7 @@ class VisibleGuess:
 class DeceptionDecision:
     feedback: str
     tile_indexes: tuple[int, ...] = ()
+    reason: DecisionReason = "no_candidate"
 
     @property
     def activated(self) -> bool:
@@ -87,23 +94,24 @@ class DeceptionEngine:
         ).digest()
         return int.from_bytes(digest[:8], "big")
 
-    def _answers_consistent_with(
+    def _pattern_counts_for(
         self,
+        guess: str,
         history: Iterable[VisibleGuess],
         real_answer: str,
         deadline: float | None = None,
-    ) -> list[str] | None:
+    ) -> tuple[dict[str, int], bool]:
         visible_history = tuple(history)
-        consistent: list[str] = []
+        pattern_counts: dict[str, int] = defaultdict(int)
         for answer in self.truth_engine.answers:
             if self._budget_expired(deadline):
-                return None
+                return pattern_counts, True
             if answer != real_answer and all(
                 self.truth_engine.evaluate(row.guess, answer) == row.feedback
                 for row in visible_history
             ):
-                consistent.append(answer)
-        return consistent
+                pattern_counts[self.truth_engine.evaluate(guess, answer)] += 1
+        return pattern_counts, self._budget_expired(deadline)
 
     @staticmethod
     def _budget_expired(deadline: float | None) -> bool:
@@ -128,26 +136,20 @@ class DeceptionEngine:
             else perf_counter() + max(0, time_budget_ms) / 1_000
         )
         if self._budget_expired(deadline):
-            return DeceptionDecision(feedback=truth_feedback)
+            return DeceptionDecision(
+                feedback=truth_feedback,
+                reason="deadline_expired",
+            )
 
         visible_history = tuple(prior_history)
-        pattern_counts: dict[str, int] = defaultdict(int)
-        consistent_answers = self._answers_consistent_with(
-            visible_history, real_answer, deadline
+        pattern_counts, deadline_expired = self._pattern_counts_for(
+            guess, visible_history, real_answer, deadline
         )
-        if consistent_answers is None:
-            return DeceptionDecision(feedback=truth_feedback)
-        for answer in consistent_answers:
-            if self._budget_expired(deadline):
-                return DeceptionDecision(feedback=truth_feedback)
-            pattern_counts[self.truth_engine.evaluate(guess, answer)] += 1
 
         candidates: list[_Candidate] = []
         target_sizes = tuple(range(min(2, max_false_tiles), 0, -1))
         for target_size in target_sizes:
             for mutation, decoy_count in pattern_counts.items():
-                if self._budget_expired(deadline):
-                    return DeceptionDecision(feedback=truth_feedback)
                 tile_indexes = tuple(
                     index
                     for index, markers in enumerate(zip(truth_feedback, mutation))
@@ -176,8 +178,16 @@ class DeceptionEngine:
                 break
 
         if not candidates:
+            if deadline_expired:
+                return DeceptionDecision(
+                    feedback=truth_feedback,
+                    reason="deadline_expired",
+                )
             if not allow_constraint_fallback:
-                return DeceptionDecision(feedback=truth_feedback)
+                return DeceptionDecision(
+                    feedback=truth_feedback,
+                    reason="strategy_restricted",
+                )
             return self._constraint_backed_feedback(
                 guess=guess,
                 truth_feedback=truth_feedback,
@@ -221,6 +231,7 @@ class DeceptionEngine:
         return DeceptionDecision(
             feedback=selected.feedback,
             tile_indexes=selected.tile_indexes,
+            reason="activated",
         )
 
     def _constraint_backed_feedback(
@@ -238,30 +249,47 @@ class DeceptionEngine:
         previously_guessed: set[str] = set()
         for row in prior_history:
             if self._budget_expired(deadline):
-                return DeceptionDecision(feedback=truth_feedback)
+                return DeceptionDecision(
+                    feedback=truth_feedback,
+                    reason="deadline_expired",
+                )
             previously_guessed.update(row.guess)
         visible_greens: list[set[str]] = [
             set() for _ in range(WORD_LENGTH)
         ]
         for row in prior_history:
             if self._budget_expired(deadline):
-                return DeceptionDecision(feedback=truth_feedback)
+                return DeceptionDecision(
+                    feedback=truth_feedback,
+                    reason="deadline_expired",
+                )
             for tile_index, marker in enumerate(row.feedback):
                 if marker == "G":
                     visible_greens[tile_index].add(row.guess[tile_index])
         for tile_index, marker in enumerate(truth_feedback):
             if self._budget_expired(deadline):
-                return DeceptionDecision(feedback=truth_feedback)
+                return DeceptionDecision(
+                    feedback=truth_feedback,
+                    reason="deadline_expired",
+                )
             if marker == "G":
                 visible_greens[tile_index].add(guess[tile_index])
 
         if any(len(letters) > 1 for letters in visible_greens):
-            return DeceptionDecision(feedback=truth_feedback)
+            return DeceptionDecision(
+                feedback=truth_feedback,
+                reason="strategy_restricted",
+            )
 
         candidates: list[_Candidate] = []
         for tile_index, truth_marker in enumerate(truth_feedback):
             if self._budget_expired(deadline):
-                return DeceptionDecision(feedback=truth_feedback)
+                if candidates:
+                    break
+                return DeceptionDecision(
+                    feedback=truth_feedback,
+                    reason="deadline_expired",
+                )
             letter = guess[tile_index]
             if (
                 truth_marker != "B"
@@ -297,7 +325,10 @@ class DeceptionEngine:
             )
 
         if not candidates:
-            return DeceptionDecision(feedback=truth_feedback)
+            return DeceptionDecision(
+                feedback=truth_feedback,
+                reason="no_candidate",
+            )
 
         strongest_support = max(
             candidate.decoy_count for candidate in candidates
@@ -320,4 +351,5 @@ class DeceptionEngine:
         return DeceptionDecision(
             feedback=selected.feedback,
             tile_indexes=selected.tile_indexes,
+            reason="activated",
         )

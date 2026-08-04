@@ -9,6 +9,9 @@ const bootstrap: BootstrapResponse = {
     puzzleKey: "2026-07-28",
     availability: "available",
     resetAt: "2026-07-29T03:00:00Z",
+    status: "unstarted",
+    currentStage: 1,
+    clearedStages: 0,
   },
   presets: [],
 };
@@ -240,5 +243,113 @@ describe("app state machine", () => {
     expect(resumed.phase).toBe("ready");
     expect(resumed.reverseEntryActive).toBe(true);
     expect(resumed.timerActive?.durationSeconds).toBe(30);
+  });
+
+  it("blocks play for Intrusion while keeping an activated Timer live", () => {
+    const ready = {
+      ...initialState,
+      phase: "ready" as const,
+      bootstrap,
+      session,
+    };
+    const revealing = reducer(ready, {
+      type: "GUESS_SUCCESS",
+      enteredGuess: "fight",
+      payload: {
+        guess: "fight",
+        feedback: "BBBBB",
+        attempt: 2,
+        status: "playing",
+        intrusion: { state: "activated", placement: "upperRight" },
+        reverseEntry: { state: "activated" },
+        timer: {
+          state: "activated",
+          durationSeconds: 10,
+          startsAt: "2026-07-28T12:00:01Z",
+          deadlineAt: "2026-07-28T12:00:11Z",
+        },
+      },
+    });
+    const intruded = reducer(revealing, { type: "REVEAL_COMPLETE" });
+    const ignoredType = reducer(intruded, {
+      type: "TYPE_LETTER",
+      letter: "c",
+    });
+    const resumed = reducer(intruded, { type: "DISMISS_INTRUSION" });
+
+    expect(intruded.phase).toBe("intrusion");
+    expect(intruded.intrusionActive?.placement).toBe("upperRight");
+    expect(intruded.timerActive?.durationSeconds).toBe(10);
+    expect(intruded.reverseEntryActive).toBe(true);
+    expect(ignoredType.currentGuess).toBe("");
+    expect(resumed.phase).toBe("ready");
+    expect(resumed.timerActive?.durationSeconds).toBe(10);
+    expect(resumed.intrusionActive).toBeNull();
+  });
+
+  it("finishes Blackout before presenting an overlapping Intrusion", () => {
+    const revealing = reducer(
+      {
+        ...initialState,
+        phase: "ready" as const,
+        bootstrap,
+        session,
+      },
+      {
+        type: "GUESS_SUCCESS",
+        enteredGuess: "picky",
+        payload: {
+          guess: "picky",
+          feedback: "BBBBB",
+          attempt: 3,
+          status: "playing",
+          blackout: { state: "activated" },
+          intrusion: { state: "activated", placement: "lowerLeft" },
+        },
+      },
+    );
+    const closing = reducer(revealing, { type: "REVEAL_COMPLETE" });
+    const opening = reducer(closing, { type: "BLACKOUT_COVERED" });
+    const intruded = reducer(opening, { type: "BLACKOUT_COMPLETE" });
+
+    expect(closing.phase).toBe("blackoutClosing");
+    expect(opening.phase).toBe("blackoutOpening");
+    expect(intruded.phase).toBe("intrusion");
+    expect(intruded.intrusionActive?.placement).toBe("lowerLeft");
+  });
+
+  it("keeps Intrusion active when a background Timer expires", () => {
+    const intruded = {
+      ...initialState,
+      phase: "intrusion" as const,
+      bootstrap,
+      session,
+      intrusionActive: {
+        state: "activated" as const,
+        placement: "upperLeft" as const,
+      },
+      timerActive: {
+        state: "activated" as const,
+        durationSeconds: 10 as const,
+        startsAt: "2026-07-28T12:00:01Z",
+        deadlineAt: "2026-07-28T12:00:11Z",
+      },
+    };
+    const expiring = reducer(intruded, { type: "TIMER_EXPIRING" });
+    const revealing = reducer(expiring, {
+      type: "TIMEOUT_SUCCESS",
+      payload: {
+        timedOut: true,
+        attempt: 3,
+        status: "playing",
+        timer: { state: "expired" },
+      },
+    });
+    const stillIntruded = reducer(revealing, { type: "REVEAL_COMPLETE" });
+
+    expect(expiring.intrusionActive).toEqual(intruded.intrusionActive);
+    expect(revealing.intrusionActive).toEqual(intruded.intrusionActive);
+    expect(stillIntruded.phase).toBe("intrusion");
+    expect(stillIntruded.intrusionActive).toEqual(intruded.intrusionActive);
   });
 });

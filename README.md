@@ -115,6 +115,9 @@ already using the one-row rules keep their stored schedule.
   overlap.
 - Deception adds three to five possible lie rows, broader punishment overlap,
   up to three Timers and Reverse Entry events, and a rare False Victory threat.
+- Intrusion can repeatedly obstruct part of the board after guesses two through
+  five. Its per-row chance is 0% / 10% / 30% / 60% from Doubt I through
+  Deception.
 - Daily remains pinned to `doubt-2@1` during this milestone.
 
 The complete tuning matrix and delivery boundary live in
@@ -182,6 +185,11 @@ The complete tuning matrix and delivery boundary live in
   do not emerge directly into Guess Timer or Reverse Entry.
 - Guess Timer keeps priority over Reverse Entry if those two would otherwise
   overlap.
+- Intrusion takes over the screen and blocks all guess input until its moving
+  Dismiss control is activated. It
+  has no per-game cap, may repeat on consecutive eligible guesses, and does not
+  pause an active Timer. If it overlaps Blackout, it appears after the curtain
+  has reopened.
 
 The planner filters the curated answer corpus once against the visible history,
 groups possible current feedback patterns, and selects from the smallest
