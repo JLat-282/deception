@@ -104,4 +104,6 @@ def test_legacy_migration_is_serialized_across_initializers(
     assert schedule_table == ("deception_schedules",)
     assert timer_table == ("guess_timer_states",)
     assert blackout_table == ("blackout_states",)
-    assert schema_version == 5
+    assert "preset_key" in columns
+    assert "blueprint_json" in columns
+    assert schema_version == 7

@@ -34,19 +34,31 @@ class DailyInfo(APIModel):
     reset_at: datetime
 
 
+class DifficultyPresetSummary(APIModel):
+    preset_key: str
+    name: str
+    rank: int
+    pressure: str
+    description: str
+    available: bool
+
+
 class BootstrapResponse(APIModel):
     config: GameConfig
     daily: DailyInfo
+    presets: list[DifficultyPresetSummary]
 
 
 class StartGameRequest(APIModel):
     mode: GameMode
+    preset_key: str | None = None
 
 
 class StartGameResponse(APIModel):
     game_id: str
     mode: GameMode
     config: GameConfig
+    preset: DifficultyPresetSummary
     puzzle_key: str | None = None
 
 
@@ -66,8 +78,9 @@ class DeceptionChange(APIModel):
 
 class ActivatedDeceptionReveal(APIModel):
     outcome: Literal["activated"]
+    kind: Literal["feedbackLie", "falseVictory"]
     scheduled_attempt: int
-    change: DeceptionChange
+    changes: list[DeceptionChange] = Field(min_length=1, max_length=2)
 
 
 class NotActivatedDeceptionReveal(APIModel):
@@ -88,11 +101,11 @@ DeceptionEvent = Annotated[
 
 
 class DeceptionReveal(APIModel):
-    events: list[DeceptionEvent] = Field(min_length=1, max_length=2)
+    events: list[DeceptionEvent] = Field(min_length=1, max_length=5)
 
 
 class ReverseEntryUpdate(APIModel):
-    state: Literal["activated", "resolved"]
+    state: Literal["activated", "resolved", "continued"]
 
 
 class ActivatedGuessTimer(APIModel):
@@ -133,6 +146,7 @@ class TimedOutResponse(APIModel):
     answer: str | None = None
     deception: DeceptionReveal | None = None
     timer: ExpiredGuessTimer
+    next_timer: ActivatedGuessTimer | None = None
 
 
 AttemptResponse = GuessResponse | TimedOutResponse

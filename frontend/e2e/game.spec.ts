@@ -1,5 +1,50 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+
+const presets = [
+  {
+    presetKey: "doubt-1@1",
+    name: "Doubt I",
+    rank: 1,
+    pressure: "Low",
+    description: "An approachable introduction to uncertain feedback.",
+    available: true,
+  },
+  {
+    presetKey: "doubt-2@1",
+    name: "Doubt II",
+    rank: 2,
+    pressure: "Standard",
+    description: "The complete standard Deception experience.",
+    available: true,
+  },
+  {
+    presetKey: "doubt-3@1",
+    name: "Doubt III",
+    rank: 3,
+    pressure: "High",
+    description: "Aggressive pressure with repeated punishments.",
+    available: true,
+  },
+  {
+    presetKey: "deception@1",
+    name: "Deception",
+    rank: 4,
+    pressure: "Extreme",
+    description: "An expert survival challenge.",
+    available: true,
+  },
+];
+
+async function startPractice(page: Page, preset = "Doubt II") {
+  await page.getByRole("button", { name: "Play Practice" }).click();
+  await page
+    .getByRole("button", {
+      name: `Play Practice on ${preset}`,
+      exact: true,
+    })
+    .click();
+}
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -9,7 +54,7 @@ test.beforeEach(async ({ page }) => {
 
 test("practice can be solved with the physical keyboard", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await startPractice(page);
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
   await page.keyboard.type("crane");
@@ -35,9 +80,17 @@ test("practice can be solved with the physical keyboard", async ({ page }) => {
   expect(serious).toEqual([]);
 });
 
+test("Deception can be selected for Practice", async ({ page }) => {
+  await page.goto("/");
+  await startPractice(page, "Deception");
+
+  await expect(page.getByText("Practice · Deception")).toBeVisible();
+  await expect(page.getByText("0 of 6 guesses")).toBeVisible();
+});
+
 test("an activated lie is audited after the game", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await startPractice(page);
 
   await page.getByRole("table").click();
   await page.keyboard.type("slate", { delay: 25 });
@@ -51,7 +104,7 @@ test("an activated lie is audited after the game", async ({ page }) => {
 
   await expect(
     page.getByText(
-      /Row 1 lied\. E was shown as in the word in another position\./,
+      /Row 1 lied on one tile\. E was shown as in the word in another position/,
     ),
   ).toBeVisible();
   await expect(
@@ -90,7 +143,7 @@ test("the Deception Guide is keyboard accessible", async ({ page }) => {
 
 test("practice can be solved with the on-screen keyboard", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await startPractice(page);
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
   for (const letter of "CRANE") {
@@ -107,7 +160,7 @@ test("Reverse Entry decodes and reveals the next accepted guess", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await startPractice(page);
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
   await page.keyboard.type("fight");
@@ -162,7 +215,7 @@ test("invalid Daily guess does not consume, valid guess does", async ({
 
 test("practice loss reveals the answer after six guesses", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await startPractice(page);
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
   for (const [index, entry] of [
@@ -191,7 +244,7 @@ test("practice loss reveals the answer after six guesses", async ({ page }) => {
 
 test("primary surface fits the current viewport", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await startPractice(page);
 
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,
@@ -227,6 +280,12 @@ test("focus order and reduced-motion reveal remain usable", async ({
     page.getByRole("button", { name: "Play Practice" }),
   ).toBeFocused();
   await page.keyboard.press("Enter");
+  await page
+    .getByRole("button", {
+      name: "Play Practice on Doubt II",
+      exact: true,
+    })
+    .click();
   await expect(page.getByText("0 of 6 guesses")).toBeVisible();
 
   const reducedAnimation = await page
@@ -260,6 +319,7 @@ test("Blackout closes after row reveal and erases accumulated feedback", async (
           availability: "available",
           resetAt: "2026-07-29T03:00:00Z",
         },
+        presets,
       },
     }),
   );
@@ -269,6 +329,7 @@ test("Blackout closes after row reveal and erases accumulated feedback", async (
         gameId: "blackout-game",
         mode: "practice",
         config: { wordLength: 5, maxGuesses: 6 },
+        preset: presets[1],
       },
     }),
   );
@@ -287,7 +348,7 @@ test("Blackout closes after row reveal and erases accumulated feedback", async (
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Play Practice" }).click();
+  await startPractice(page);
   for (const [index, guess] of ["slate", "fight", "picky"].entries()) {
     await page.keyboard.type(guess);
     await page.keyboard.press("Enter");

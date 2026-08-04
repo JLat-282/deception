@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
@@ -9,6 +10,14 @@ from typing import Callable
 from .clock import PuzzleWindow, daily_window
 from .config import Settings
 from .deception import DeceptionEngine, VisibleGuess
+from .difficulty import (
+    DEFAULT_PRESET_KEY,
+    BlueprintOverrides,
+    GameBlueprint,
+    build_blueprint,
+    get_preset,
+    public_presets,
+)
 from .engine import MAX_GUESSES, WORD_LENGTH, TruthEngine, normalize_word
 from .errors import DomainError, GuessValidationError
 from .repository import (
@@ -30,6 +39,7 @@ from .schemas import (
     DailyInfo,
     DeceptionChange,
     DeceptionReveal,
+    DifficultyPresetSummary,
     GameConfig,
     GuessResponse,
     NotActivatedDeceptionReveal,
@@ -43,10 +53,7 @@ from .schemas import (
 
 NowProvider = Callable[[], datetime]
 SeedProvider = Callable[[], str]
-TIMER_GAME_PROBABILITY = 0.45
-THIRTY_SECOND_TIMER_PROBABILITY = 0.70
 TIMER_ACTIVATION_DELAY = timedelta(seconds=1)
-BLACKOUT_GAME_PROBABILITY = 0.10
 
 
 class GameService:
@@ -97,6 +104,18 @@ class GameService:
         with self.repository.transaction() as connection:
             self.repository.ensure_device(connection, device_id, now)
 
+    @staticmethod
+    def _preset_summary(preset_key: str) -> DifficultyPresetSummary:
+        preset = get_preset(preset_key)
+        return DifficultyPresetSummary(
+            preset_key=preset.key,
+            name=preset.name,
+            rank=preset.order,
+            pressure=preset.pressure,
+            description=preset.description,
+            available=preset.available,
+        )
+
     def bootstrap(self, device_id: str) -> BootstrapResponse:
         now = self.now()
         window = daily_window(now)
@@ -115,6 +134,10 @@ class GameService:
                 availability=availability,
                 reset_at=window.reset_at,
             ),
+            presets=[
+                self._preset_summary(preset.key)
+                for preset in public_presets()
+            ],
         )
 
     def _daily_answer(self, window: PuzzleWindow) -> str:
@@ -139,6 +162,67 @@ class GameService:
         ]
         return secrets.choice(choices or list(self.engine.answers))
 
+    def _blueprint_overrides(self) -> BlueprintOverrides:
+        lie_attempts = self.settings.fixed_lie_rows
+        if lie_attempts is None and self.settings.fixed_lie_row is not None:
+            lie_attempts = (self.settings.fixed_lie_row,)
+        return BlueprintOverrides(
+            lie_attempts=lie_attempts,
+            timer_roll=self.settings.fixed_timer_roll,
+            timer_attempt=self.settings.fixed_timer_attempt,
+            timer_duration=self.settings.fixed_timer_duration,
+            blackout_roll=self.settings.fixed_blackout_roll,
+            blackout_attempt=self.settings.fixed_blackout_attempt,
+            timer_enabled=self.settings.guess_timer_enabled,
+            reverse_enabled=self.settings.reverse_entry_enabled,
+            blackout_enabled=self.settings.blackout_enabled,
+        )
+
+    def _daily_blueprint_seed(
+        self, puzzle_key: str, preset_key: str
+    ) -> str:
+        return hmac.new(
+            self.settings.daily_seed.encode("utf-8"),
+            f"blueprint:v1:{puzzle_key}:{preset_key}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _new_blueprint(
+        self,
+        preset_key: str,
+        *,
+        mode: str,
+        puzzle_key: str | None,
+    ) -> GameBlueprint:
+        seed = (
+            self.session_seed_provider()
+            if self.settings.fixed_session_seed is not None
+            else (
+                self._daily_blueprint_seed(puzzle_key, preset_key)
+                if mode == "daily" and puzzle_key is not None
+                else self.session_seed_provider()
+            )
+        )
+        return build_blueprint(
+            preset_key, seed, overrides=self._blueprint_overrides()
+        )
+
+    def _blueprint_for_game(
+        self, connection, game: StoredGame
+    ) -> tuple[StoredGame, GameBlueprint]:
+        if game.blueprint_json:
+            return game, GameBlueprint.from_json(game.blueprint_json)
+        blueprint = self._new_blueprint(
+            game.preset_key,
+            mode=game.mode,
+            puzzle_key=game.puzzle_key,
+        )
+        blueprint_json = blueprint.to_json()
+        self.repository.set_game_blueprint(
+            connection, game.game_id, game.preset_key, blueprint_json
+        )
+        return replace(game, blueprint_json=blueprint_json), blueprint
+
     def _create_schedules(
         self,
         connection,
@@ -148,16 +232,9 @@ class GameService:
         existing = self._get_schedules(connection, game)
         if existing:
             return existing
-        seed = self.session_seed_provider()
-        scheduled_attempts = (
-            self.settings.fixed_lie_rows
-            or (
-                (self.settings.fixed_lie_row,)
-                if self.settings.fixed_lie_row is not None
-                else None
-            )
-            or self.deception_engine.scheduled_attempts(seed)
-        )
+        game, blueprint = self._blueprint_for_game(connection, game)
+        seed = blueprint.seed
+        scheduled_attempts = blueprint.lie_attempts
         if game.mode == "daily":
             if game.puzzle_key is None:
                 raise DomainError(
@@ -213,18 +290,29 @@ class GameService:
         schedules = self._get_schedules(connection, game)
         if not schedules:
             schedules = self._create_schedules(connection, game, now)
-        blackout_state = self._ensure_blackout_state(connection, game, now)
-        self._ensure_reverse_entry_state(connection, game, now)
+        game, blueprint = self._blueprint_for_game(connection, game)
+        blackout_state = self._ensure_blackout_state(
+            connection, game, now, blueprint
+        )
+        self._ensure_reverse_entry_state(connection, game, now, blueprint)
         self._ensure_guess_timer_state(
-            connection, game, now, blackout_state=blackout_state
+            connection,
+            game,
+            now,
+            blueprint,
+            blackout_state=blackout_state,
         )
         return game, schedules
 
     def _ensure_reverse_entry_state(
-        self, connection, game: StoredGame, now: datetime
+        self,
+        connection,
+        game: StoredGame,
+        now: datetime,
+        blueprint: GameBlueprint,
     ) -> ReverseEntryState | None:
         if (
-            not self.settings.reverse_entry_enabled
+            not blueprint.reverse_enabled
             or game.rules_version < CURRENT_RULES_VERSION
         ):
             return None
@@ -236,12 +324,17 @@ class GameService:
         return self.repository.create_reverse_entry_state(
             connection,
             game.game_id,
-            self.session_seed_provider(),
+            blueprint.reverse_seed,
+            blueprint.reverse_max_events,
             now,
         )
 
     def _ensure_blackout_state(
-        self, connection, game: StoredGame, now: datetime
+        self,
+        connection,
+        game: StoredGame,
+        now: datetime,
+        blueprint: GameBlueprint,
     ) -> BlackoutState | None:
         if (
             not self.settings.blackout_enabled
@@ -254,29 +347,17 @@ class GameService:
         if existing is not None:
             return existing
 
-        seed = self.session_seed_provider()
-        inclusion_roll = (
-            self.settings.fixed_blackout_roll
-            if self.settings.fixed_blackout_roll is not None
-            else self._seeded_probability(seed, "blackout:v1:inclusion")
-        )
-        if inclusion_roll >= BLACKOUT_GAME_PROBABILITY:
+        seed = blueprint.seed
+        if blueprint.blackout_attempt is None:
             return self.repository.create_blackout_state(
                 connection, game.game_id, seed, None, now
             )
-
-        scheduled_attempt = self.settings.fixed_blackout_attempt
-        if scheduled_attempt is None:
-            attempt_digest = hmac.new(
-                seed.encode("utf-8"),
-                b"blackout:v1:attempt",
-                hashlib.sha256,
-            ).digest()
-            scheduled_attempt = 3 + int.from_bytes(
-                attempt_digest[:8], "big"
-            ) % 3
         return self.repository.create_blackout_state(
-            connection, game.game_id, seed, scheduled_attempt, now
+            connection,
+            game.game_id,
+            seed,
+            blueprint.blackout_attempt,
+            now,
         )
 
     @staticmethod
@@ -294,20 +375,12 @@ class GameService:
             blackout_state.scheduled_attempt + 1,
         }
 
-    @staticmethod
-    def _seeded_probability(seed: str, label: str) -> float:
-        digest = hmac.new(
-            seed.encode("utf-8"),
-            label.encode("utf-8"),
-            hashlib.sha256,
-        ).digest()
-        return int.from_bytes(digest[:8], "big") / 2**64
-
     def _ensure_guess_timer_state(
         self,
         connection,
         game: StoredGame,
         now: datetime,
+        blueprint: GameBlueprint,
         *,
         blackout_state: BlackoutState | None = None,
     ) -> GuessTimerState | None:
@@ -316,73 +389,31 @@ class GameService:
             or game.rules_version < CURRENT_RULES_VERSION
         ):
             return None
-        existing = self.repository.get_guess_timer_state(
+        existing = self.repository.list_guess_timer_states(
             connection, game.game_id
         )
-        if existing is not None:
-            return existing
+        if existing:
+            return existing[0]
 
-        seed = self.session_seed_provider()
-        inclusion_roll = (
-            self.settings.fixed_timer_roll
-            if self.settings.fixed_timer_roll is not None
-            else self._seeded_probability(
-                seed, "guess-timer:v1:inclusion"
-            )
-        )
-        if inclusion_roll >= TIMER_GAME_PROBABILITY:
-            return self.repository.create_guess_timer_state(
-                connection,
-                game.game_id,
-                seed,
-                None,
-                None,
-                now,
-            )
-
-        blocked_attempts = self._blackout_blocked_attempts(blackout_state)
-        eligible_attempts = [
-            attempt
-            for attempt in range(2, 7)
-            if attempt not in blocked_attempts
-        ]
-        scheduled_attempt = self.settings.fixed_timer_attempt
-        if scheduled_attempt not in eligible_attempts:
-            attempt_digest = hmac.new(
-                seed.encode("utf-8"),
-                b"guess-timer:v2:attempt",
-                hashlib.sha256,
-            ).digest()
-            scheduled_attempt = eligible_attempts[
-                int.from_bytes(attempt_digest[:8], "big")
-                % len(eligible_attempts)
-            ]
-
-        duration_seconds = self.settings.fixed_timer_duration
-        if duration_seconds is None:
-            duration_roll = self._seeded_probability(
-                seed, "guess-timer:v1:duration"
-            )
-            duration_seconds = (
-                30
-                if duration_roll < THIRTY_SECOND_TIMER_PROBABILITY
-                else 10
-            )
-
-        return self.repository.create_guess_timer_state(
+        created = self.repository.create_guess_timer_events(
             connection,
             game.game_id,
-            seed,
-            scheduled_attempt,
-            duration_seconds,
+            blueprint.seed,
+            tuple(
+                (event.attempt, event.duration_seconds)
+                for event in blueprint.timer_events
+            ),
             now,
         )
+        return created[0] if created else None
 
     def _activate_guess_timer(
         self,
         connection,
         timer_state: GuessTimerState,
         now: datetime,
+        *,
+        after_blackout: bool = False,
     ) -> ActivatedGuessTimer:
         if timer_state.duration_seconds not in {10, 30}:
             raise DomainError(
@@ -390,13 +421,16 @@ class GameService:
                 "SERVICE_UNAVAILABLE",
                 "The Guess Timer duration is unavailable.",
             )
-        starts_at = now + TIMER_ACTIVATION_DELAY
+        starts_at = now + (
+            timedelta(seconds=2) if after_blackout else TIMER_ACTIVATION_DELAY
+        )
         deadline_at = starts_at + timedelta(
             seconds=timer_state.duration_seconds
         )
         active = self.repository.activate_guess_timer(
             connection,
             timer_state.game_id,
+            timer_state.ordinal,
             starts_at,
             deadline_at,
             now,
@@ -423,6 +457,7 @@ class GameService:
         state: ReverseEntryState,
         display_feedback: str,
         attempt: int,
+        fallback_probability: float,
     ) -> str | None:
         if display_feedback.count("B") >= 4:
             return "lowInformation"
@@ -435,7 +470,7 @@ class GameService:
                 hashlib.sha256,
             ).digest()
             roll = int.from_bytes(digest[:8], "big") / 2**64
-        return "chance" if roll < 0.10 else None
+        return "chance" if roll < fallback_probability else None
 
     @staticmethod
     def _deception_reveal(
@@ -453,22 +488,27 @@ class GameService:
             None,
         )
         if row is not None and row.truth_feedback != row.display_feedback:
-            tile_index = next(
-                index
+            changes = [
+                DeceptionChange(
+                    tile_index=index,
+                    letter=row.guess[index],
+                    truthful_feedback=row.truth_feedback[index],
+                    displayed_feedback=row.display_feedback[index],
+                )
                 for index, markers in enumerate(
                     zip(row.truth_feedback, row.display_feedback)
                 )
                 if markers[0] != markers[1]
-            )
+            ]
             return ActivatedDeceptionReveal(
                 outcome="activated",
-                scheduled_attempt=schedule.scheduled_attempt,
-                change=DeceptionChange(
-                    tile_index=tile_index,
-                    letter=row.guess[tile_index],
-                    truthful_feedback=row.truth_feedback[tile_index],
-                    displayed_feedback=row.display_feedback[tile_index],
+                kind=(
+                    "falseVictory"
+                    if row.truth_feedback == "GGGGG"
+                    else "feedbackLie"
                 ),
+                scheduled_attempt=schedule.scheduled_attempt,
+                changes=changes,
             )
 
         if schedule.scheduled_attempt > guess_count:
@@ -489,11 +529,34 @@ class GameService:
         )
 
     def start_game(
-        self, device_id: str, mode: str
+        self,
+        device_id: str,
+        mode: str,
+        preset_key: str | None = None,
     ) -> StartGameResponse:
         if mode not in {"daily", "practice"}:
             raise DomainError(
                 400, "INVALID_MODE", "Choose either daily or practice mode."
+            )
+
+        selected_preset_key = (
+            DEFAULT_PRESET_KEY
+            if mode == "daily" or preset_key is None
+            else preset_key
+        )
+        try:
+            selected_preset = get_preset(selected_preset_key)
+        except ValueError as error:
+            raise DomainError(
+                400,
+                "INVALID_PRESET",
+                "Choose a recognized difficulty.",
+            ) from error
+        if not selected_preset.available:
+            raise DomainError(
+                409,
+                "PRESET_UNAVAILABLE",
+                "That difficulty is not available yet.",
             )
 
         now = self.now()
@@ -550,6 +613,12 @@ class GameService:
                     answer,
                     now,
                     puzzle_key,
+                    preset_key=selected_preset_key,
+                    blueprint_json=self._new_blueprint(
+                        selected_preset_key,
+                        mode="daily",
+                        puzzle_key=puzzle_key,
+                    ).to_json(),
                 )
                 self.repository.create_daily_attempt(
                     connection, device_id, puzzle_key, game_id, now
@@ -566,18 +635,14 @@ class GameService:
                     "practice",
                     answer,
                     now,
+                    preset_key=selected_preset_key,
+                    blueprint_json=self._new_blueprint(
+                        selected_preset_key,
+                        mode="practice",
+                        puzzle_key=None,
+                    ).to_json(),
                 )
-            self._create_schedules(connection, game, now)
-            blackout_state = self._ensure_blackout_state(
-                connection, game, now
-            )
-            self._ensure_reverse_entry_state(connection, game, now)
-            self._ensure_guess_timer_state(
-                connection,
-                game,
-                now,
-                blackout_state=blackout_state,
-            )
+            game, _ = self._ensure_current_rules(connection, game, now)
 
         return self._start_response(game)
 
@@ -586,6 +651,7 @@ class GameService:
             game_id=game.game_id,
             mode=game.mode,
             config=self.config,
+            preset=self._preset_summary(game.preset_key),
             puzzle_key=game.puzzle_key,
         )
 
@@ -643,10 +709,20 @@ class GameService:
         self.repository.resolve_guess_timer(
             connection,
             game.game_id,
+            timer_state.ordinal,
             "expired",
             attempt,
             now,
         )
+        next_timer = None
+        if status == "playing":
+            scheduled_next = self.repository.get_guess_timer_for_attempt(
+                connection, game.game_id, attempt + 1
+            )
+            if scheduled_next is not None and scheduled_next.status == "scheduled":
+                next_timer = self._activate_guess_timer(
+                    connection, scheduled_next, self.now()
+                )
         deception = self._terminal_deception(
             connection,
             game.game_id,
@@ -660,6 +736,7 @@ class GameService:
             answer=game.answer if status == "lost" else None,
             deception=deception,
             timer=ExpiredGuessTimer(state="expired"),
+            next_timer=next_timer,
         )
 
     def expire_timer(
@@ -675,9 +752,25 @@ class GameService:
             game, schedules = self._ensure_current_rules(
                 connection, game, now
             )
-            timer_state = self.repository.get_guess_timer_state(
-                connection, game_id
+            timer_state = self.repository.get_guess_timer_for_attempt(
+                connection, game_id, game.guess_count + 1
             )
+            resolved_timer = (
+                self.repository.get_guess_timer_for_attempt(
+                    connection, game_id, game.guess_count
+                )
+                if game.guess_count > 0
+                else None
+            )
+            # Preserve idempotence when no later timed turn is active. When
+            # timers are consecutive, the newly active timer must win this
+            # lookup so a duplicate expiry request cannot consume it early.
+            if (
+                timer_state is None
+                and resolved_timer is not None
+                and resolved_timer.status == "expired"
+            ):
+                timer_state = resolved_timer
             if (
                 timer_state is not None
                 and timer_state.status == "expired"
@@ -696,6 +789,7 @@ class GameService:
                     answer=game.answer if game.status == "lost" else None,
                     deception=deception,
                     timer=ExpiredGuessTimer(state="expired"),
+                    next_timer=None,
                 )
             if game.status != "playing":
                 raise DomainError(
@@ -743,16 +837,31 @@ class GameService:
             game, schedules = self._ensure_current_rules(
                 connection, game, now
             )
-            timer_state = self.repository.get_guess_timer_state(
+            blueprint = (
+                GameBlueprint.from_json(game.blueprint_json)
+                if game.blueprint_json
+                else None
+            )
+            timer_states = self.repository.list_guess_timer_states(
                 connection, game_id
             )
             blackout_state = self.repository.get_blackout_state(
                 connection, game_id
             )
-            blackout_blocked_attempts = self._blackout_blocked_attempts(
-                blackout_state
+            blackout_blocked_attempts = (
+                set(blueprint.blackout_blocked_attempts)
+                if blueprint is not None
+                else self._blackout_blocked_attempts(blackout_state)
             )
             attempt = game.guess_count + 1
+            timer_state = next(
+                (
+                    state
+                    for state in timer_states
+                    if state.scheduled_attempt == attempt
+                ),
+                None,
+            )
             timer_active = (
                 timer_state is not None
                 and timer_state.status == "active"
@@ -777,7 +886,10 @@ class GameService:
             reverse_entry_active = (
                 reverse_entry_state is not None
                 and reverse_entry_state.status == "active"
-                and not timer_active
+                and (
+                    get_preset(game.preset_key).combination_policy != "none"
+                    or not timer_active
+                )
             )
             submitted_guess = normalize_word(raw_guess)
             if reverse_entry_active:
@@ -795,14 +907,10 @@ class GameService:
 
             truth_feedback = self.engine.evaluate(guess, game.answer)
             display_feedback = truth_feedback
-
-            if guess == game.answer:
-                status = "won"
-            elif attempt >= MAX_GUESSES:
-                status = "lost"
-            else:
-                status = "playing"
-
+            prior_guesses = self.repository.list_guesses(
+                connection, game_id
+            )
+            is_correct = guess == game.answer
             schedule = next(
                 (
                     item
@@ -811,14 +919,28 @@ class GameService:
                 ),
                 None,
             )
+            false_victory_eligible = (
+                is_correct
+                and blueprint is not None
+                and blueprint.false_victory_enabled
+                and attempt in range(2, 5)
+                and schedule is not None
+                and not any(
+                    row.truth_feedback == "GGGGG" for row in prior_guesses
+                )
+            )
+            if is_correct:
+                status = "won"
+            elif attempt >= MAX_GUESSES:
+                status = "lost"
+            else:
+                status = "playing"
+
             if (
                 schedule is not None
                 and attempt < MAX_GUESSES
-                and status != "won"
+                and (not is_correct or false_victory_eligible)
             ):
-                prior_guesses = self.repository.list_guesses(
-                    connection, game_id
-                )
                 excluded_tile_indexes = {
                     index
                     for row in prior_guesses
@@ -827,6 +949,8 @@ class GameService:
                     )
                     if markers[0] != markers[1]
                 }
+                if get_preset(game.preset_key).max_false_tiles > 1:
+                    excluded_tile_indexes = set()
                 decision_seed = schedule.seed
                 if schedule.strategy_version >= 2:
                     decision_seed = hmac.new(
@@ -850,9 +974,16 @@ class GameService:
                     allow_constraint_fallback=(
                         schedule.strategy_version >= 3
                     ),
+                    max_false_tiles=(
+                        blueprint.false_tiles_for_attempt(attempt)
+                        if blueprint is not None
+                        else 1
+                    ),
                     time_budget_ms=self.settings.deception_decision_budget_ms,
                 )
                 display_feedback = decision.feedback
+                if is_correct and decision.activated:
+                    status = "playing"
 
             if game.mode == "daily":
                 if game.puzzle_key is None:
@@ -894,17 +1025,24 @@ class GameService:
                 self.repository.resolve_guess_timer(
                     connection,
                     game_id,
+                    timer_state.ordinal,
                     "completed",
                     attempt,
                     now,
                 )
                 timer_update = CompletedGuessTimer(state="completed")
 
+            next_timer_state = next(
+                (
+                    state
+                    for state in timer_states
+                    if state.status == "scheduled"
+                    and state.scheduled_attempt == attempt + 1
+                ),
+                None,
+            )
             timer_targets_next_attempt = (
-                timer_state is not None
-                and timer_state.status == "scheduled"
-                and timer_state.scheduled_attempt == attempt + 1
-                and status == "playing"
+                next_timer_state is not None and status == "playing"
             )
             blackout_update = None
             blackout_activates = (
@@ -918,19 +1056,40 @@ class GameService:
                 blackout_update = ActivatedBlackout(state="activated")
             reverse_entry_update = None
             if reverse_entry_active:
+                can_rearm = (
+                    reverse_entry_state is not None
+                    and reverse_entry_state.event_count
+                    < reverse_entry_state.max_events
+                    and status == "playing"
+                )
                 self.repository.consume_reverse_entry(
-                    connection, game_id, attempt, now
+                    connection, game_id, attempt, now, rearm=can_rearm
                 )
                 reverse_entry_update = ReverseEntryUpdate(state="resolved")
-            elif (
+                reverse_entry_state = self.repository.get_reverse_entry_state(
+                    connection, game_id
+                )
+            combination_policy = get_preset(game.preset_key).combination_policy
+            reverse_can_overlap = combination_policy != "none"
+            if (
                 reverse_entry_state is not None
                 and reverse_entry_state.status == "armed"
                 and status == "playing"
-                and not timer_targets_next_attempt
-                and attempt + 1 not in blackout_blocked_attempts
+                and (reverse_can_overlap or not timer_targets_next_attempt)
+                and (
+                    reverse_can_overlap
+                    or attempt + 1 not in blackout_blocked_attempts
+                )
             ):
                 trigger_reason = self._reverse_entry_trigger_reason(
-                    reverse_entry_state, display_feedback, attempt
+                    reverse_entry_state,
+                    display_feedback,
+                    attempt,
+                    (
+                        blueprint.reverse_fallback_probability
+                        if blueprint is not None
+                        else 0.10
+                    ),
                 )
                 if trigger_reason is not None:
                     self.repository.activate_reverse_entry(
@@ -941,13 +1100,18 @@ class GameService:
                         now,
                     )
                     reverse_entry_update = ReverseEntryUpdate(
-                        state="activated"
+                        state=(
+                            "continued"
+                            if reverse_entry_update is not None
+                            else "activated"
+                        )
                     )
-            if timer_targets_next_attempt and timer_state is not None:
+            if timer_targets_next_attempt and next_timer_state is not None:
                 timer_update = self._activate_guess_timer(
                     connection,
-                    timer_state,
+                    next_timer_state,
                     self.now(),
+                    after_blackout=blackout_activates,
                 )
             deception = self._terminal_deception(
                 connection,

@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import type { DailyInfo, GameMode } from "../api/types";
 import { BrandHeader } from "./BrandHeader";
 
@@ -6,7 +7,9 @@ type ModeSelectProps = {
   busy: boolean;
   message?: string;
   onStart: (mode: GameMode) => void;
+  onPractice: () => void;
   onHelp: () => void;
+  practiceButtonRef?: Ref<HTMLButtonElement>;
 };
 
 export function ModeSelect({
@@ -14,7 +17,9 @@ export function ModeSelect({
   busy,
   message,
   onStart,
+  onPractice,
   onHelp,
+  practiceButtonRef,
 }: ModeSelectProps) {
   const dailyUsed = daily.availability === "used";
 
@@ -65,9 +70,10 @@ export function ModeSelect({
           <p>Each round starts with a fresh word.</p>
           <button
             className="mode-button mode-button--practice"
+            ref={practiceButtonRef}
             type="button"
             disabled={busy}
-            onClick={() => onStart("practice")}
+            onClick={onPractice}
           >
             Play Practice
           </button>

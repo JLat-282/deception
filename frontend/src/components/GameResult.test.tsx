@@ -68,13 +68,16 @@ describe("GameResult", () => {
           events: [
             {
               outcome: "activated",
+              kind: "feedbackLie",
               scheduledAttempt: 1,
-              change: {
-                tileIndex: 3,
-                letter: "t",
-                truthfulFeedback: "B",
-                displayedFeedback: "Y",
-              },
+              changes: [
+                {
+                  tileIndex: 3,
+                  letter: "t",
+                  truthfulFeedback: "B",
+                  displayedFeedback: "Y",
+                },
+              ],
             },
             {
               outcome: "notActivated",
@@ -91,13 +94,48 @@ describe("GameResult", () => {
 
     expect(
       screen.getByText(
-        /Row 1 lied\. T was shown as in the word in another position\./,
+        /Row 1 lied on one tile\. T was shown as in the word in another position/,
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
         "Row 4 was selected, but you finished before reaching it.",
       ),
+    ).toBeInTheDocument();
+  });
+
+  it("reveals when Deception rejected an earlier correct answer", () => {
+    render(
+      <GameResult
+        mode="practice"
+        status="won"
+        answer="crane"
+        attempt={3}
+        deception={{
+          events: [
+            {
+              outcome: "activated",
+              kind: "falseVictory",
+              scheduledAttempt: 2,
+              changes: [
+                {
+                  tileIndex: 1,
+                  letter: "r",
+                  truthfulFeedback: "G",
+                  displayedFeedback: "B",
+                },
+              ],
+            },
+          ],
+        }}
+        onClose={vi.fn()}
+        onPractice={vi.fn()}
+        onModes={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("Row 2 was the answer, but Deception rejected it."),
     ).toBeInTheDocument();
   });
 });

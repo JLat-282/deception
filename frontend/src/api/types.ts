@@ -13,9 +13,19 @@ export type DailyInfo = {
   resetAt: string;
 };
 
+export type DifficultyPresetSummary = {
+  presetKey: string;
+  name: string;
+  rank: number;
+  pressure: string;
+  description: string;
+  available: boolean;
+};
+
 export type BootstrapResponse = {
   config: GameConfig;
   daily: DailyInfo;
+  presets: DifficultyPresetSummary[];
 };
 
 export type StartGameResponse = {
@@ -23,18 +33,20 @@ export type StartGameResponse = {
   mode: GameMode;
   config: GameConfig;
   puzzleKey?: string;
+  preset: DifficultyPresetSummary;
 };
 
 export type DeceptionEvent =
   | {
       outcome: "activated";
+      kind: "feedbackLie" | "falseVictory";
       scheduledAttempt: number;
-      change: {
+      changes: Array<{
         tileIndex: number;
         letter: string;
         truthfulFeedback: FeedbackMarker;
         displayedFeedback: FeedbackMarker;
-      };
+      }>;
     }
   | {
       outcome: "notActivated";
@@ -61,7 +73,7 @@ export type GuessResponse = {
   answer?: string;
   deception?: DeceptionReveal;
   reverseEntry?: {
-    state: "activated" | "resolved";
+    state: "activated" | "resolved" | "continued";
   };
   timer?: ActivatedGuessTimer | { state: "completed" };
   blackout?: { state: "activated" };
@@ -74,6 +86,7 @@ export type TimedOutResponse = {
   answer?: string;
   deception?: DeceptionReveal;
   timer: { state: "expired" };
+  nextTimer?: ActivatedGuessTimer;
 };
 
 export type AttemptResponse = GuessResponse | TimedOutResponse;

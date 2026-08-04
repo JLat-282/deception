@@ -22,6 +22,7 @@ class Scenario:
     answer: str = "crane"
     maximum_p99_ms: float | None = None
     must_activate: bool = False
+    max_false_tiles: int = 1
 
 
 SCENARIOS = (
@@ -41,6 +42,24 @@ SCENARIOS = (
         answer="gnash",
         maximum_p99_ms=100,
         must_activate=True,
+    ),
+    Scenario(
+        name="Doubt III coordinated two-tile search",
+        guess="slate",
+        prior_guesses=(),
+        baseline_p50_ms=None,
+        maximum_p99_ms=100,
+        must_activate=True,
+        max_false_tiles=2,
+    ),
+    Scenario(
+        name="Deception False Victory search",
+        guess="crane",
+        prior_guesses=("fight",),
+        baseline_p50_ms=None,
+        maximum_p99_ms=100,
+        must_activate=True,
+        max_false_tiles=2,
     ),
 )
 
@@ -76,11 +95,19 @@ def benchmark_scenario(
             truth_feedback=truth_feedback,
             prior_history=history,
             seed=f"benchmark-{scenario.name}-{sample}",
+            max_false_tiles=scenario.max_false_tiles,
         )
         timings.append((perf_counter() - started_at) * 1_000)
         if scenario.must_activate and not decision.activated:
             raise RuntimeError(
                 f"{scenario.name} did not activate its expected lie"
+            )
+        if (
+            scenario.max_false_tiles == 2
+            and len(decision.tile_indexes) != 2
+        ):
+            raise RuntimeError(
+                f"{scenario.name} did not produce its expected two-tile lie"
             )
 
     return {

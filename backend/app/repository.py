@@ -10,8 +10,8 @@ from typing import Iterator, Literal
 
 GameMode = Literal["daily", "practice"]
 GameStatus = Literal["playing", "won", "lost"]
-CURRENT_RULES_VERSION = 6
-CURRENT_DECEPTION_STRATEGY_VERSION = 3
+CURRENT_RULES_VERSION = 8
+CURRENT_DECEPTION_STRATEGY_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,8 @@ class StoredGame:
     status: GameStatus
     guess_count: int
     rules_version: int
+    preset_key: str
+    blueprint_json: str | None
 
 
 @dataclass(frozen=True)
@@ -58,11 +60,14 @@ class ReverseEntryState:
     trigger_attempt: int | None
     trigger_reason: Literal["lowInformation", "chance"] | None
     consumed_attempt: int | None
+    event_count: int
+    max_events: int
 
 
 @dataclass(frozen=True)
 class GuessTimerState:
     game_id: str
+    ordinal: int
     seed: str
     status: Literal[
         "skipped", "scheduled", "active", "completed", "expired"
@@ -271,6 +276,39 @@ CREATE TABLE IF NOT EXISTS blackout_states (
 );
 """
 
+MIGRATION_7 = """
+CREATE TABLE IF NOT EXISTS reverse_entry_states_v2 (
+    game_id TEXT PRIMARY KEY REFERENCES games(id),
+    seed TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('armed', 'active', 'consumed')),
+    trigger_attempt INTEGER CHECK (trigger_attempt BETWEEN 1 AND 5),
+    trigger_reason TEXT CHECK (trigger_reason IN ('lowInformation', 'chance')),
+    consumed_attempt INTEGER CHECK (consumed_attempt BETWEEN 2 AND 6),
+    event_count INTEGER NOT NULL DEFAULT 0 CHECK (event_count >= 0),
+    max_events INTEGER NOT NULL DEFAULT 1 CHECK (max_events >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (event_count <= max_events)
+);
+
+CREATE TABLE IF NOT EXISTS guess_timer_events (
+    game_id TEXT NOT NULL REFERENCES games(id),
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+    seed TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('skipped', 'scheduled', 'active', 'completed', 'expired')
+    ),
+    scheduled_attempt INTEGER CHECK (scheduled_attempt BETWEEN 2 AND 6),
+    duration_seconds INTEGER CHECK (duration_seconds IN (10, 30)),
+    starts_at TEXT,
+    deadline_at TEXT,
+    resolved_attempt INTEGER CHECK (resolved_attempt BETWEEN 2 AND 6),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (game_id, ordinal),
+    UNIQUE (game_id, scheduled_attempt)
+);
+"""
 
 class Repository:
     def __init__(self, db_path: Path) -> None:
@@ -337,6 +375,55 @@ class Repository:
             if version < 5:
                 self._execute_script(connection, MIGRATION_5)
                 connection.execute("PRAGMA user_version = 5")
+            if version < 6:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(games)"
+                    ).fetchall()
+                }
+                if "preset_key" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE games ADD COLUMN preset_key TEXT NOT NULL
+                        DEFAULT 'doubt-2@1'
+                        """
+                    )
+                if "blueprint_json" not in columns:
+                    connection.execute(
+                        "ALTER TABLE games ADD COLUMN blueprint_json TEXT"
+                    )
+                connection.execute("PRAGMA user_version = 6")
+            if version < 7:
+                self._execute_script(connection, MIGRATION_7)
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO reverse_entry_states_v2(
+                        game_id, seed, status, trigger_attempt, trigger_reason,
+                        consumed_attempt, event_count, max_events, created_at,
+                        updated_at
+                    )
+                    SELECT game_id, seed, status, trigger_attempt, trigger_reason,
+                           consumed_attempt,
+                           CASE WHEN status = 'armed' THEN 0 ELSE 1 END,
+                           1, created_at, updated_at
+                    FROM reverse_entry_states
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO guess_timer_events(
+                        game_id, ordinal, seed, status, scheduled_attempt,
+                        duration_seconds, starts_at, deadline_at,
+                        resolved_attempt, created_at, updated_at
+                    )
+                    SELECT game_id, 1, seed, status, scheduled_attempt,
+                           duration_seconds, starts_at, deadline_at,
+                           resolved_attempt, created_at, updated_at
+                    FROM guess_timer_states
+                    """
+                )
+                connection.execute("PRAGMA user_version = 7")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -426,14 +513,17 @@ class Repository:
         answer: str,
         created_at: datetime,
         puzzle_key: str | None = None,
+        preset_key: str = "doubt-2@1",
+        blueprint_json: str | None = None,
     ) -> StoredGame:
         timestamp = created_at.isoformat()
         connection.execute(
             """
             INSERT INTO games(
                 id, device_id, mode, puzzle_key, answer, status,
-                guess_count, created_at, updated_at, rules_version
-            ) VALUES (?, ?, ?, ?, ?, 'playing', 0, ?, ?, ?)
+                guess_count, created_at, updated_at, rules_version,
+                preset_key, blueprint_json
+            ) VALUES (?, ?, ?, ?, ?, 'playing', 0, ?, ?, ?, ?, ?)
             """,
             (
                 game_id,
@@ -444,6 +534,8 @@ class Repository:
                 timestamp,
                 timestamp,
                 CURRENT_RULES_VERSION,
+                preset_key,
+                blueprint_json,
             ),
         )
         return StoredGame(
@@ -455,6 +547,8 @@ class Repository:
             status="playing",
             guess_count=0,
             rules_version=CURRENT_RULES_VERSION,
+            preset_key=preset_key,
+            blueprint_json=blueprint_json,
         )
 
     @staticmethod
@@ -481,7 +575,7 @@ class Repository:
         row = connection.execute(
             """
             SELECT id, device_id, mode, puzzle_key, answer, status,
-                   guess_count, rules_version
+                   guess_count, rules_version, preset_key, blueprint_json
             FROM games
             WHERE id = ?
             """,
@@ -498,6 +592,23 @@ class Repository:
             status=row["status"],
             guess_count=row["guess_count"],
             rules_version=row["rules_version"],
+            preset_key=row["preset_key"],
+            blueprint_json=row["blueprint_json"],
+        )
+
+    @staticmethod
+    def set_game_blueprint(
+        connection: sqlite3.Connection,
+        game_id: str,
+        preset_key: str,
+        blueprint_json: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE games SET preset_key = ?, blueprint_json = ?
+            WHERE id = ? AND guess_count = 0
+            """,
+            (preset_key, blueprint_json, game_id),
         )
 
     @staticmethod
@@ -526,12 +637,12 @@ class Repository:
         if (daily_puzzle_key is None) == (game_id is None):
             raise ValueError("Provide exactly one deception schedule scope.")
         if (
-            len(scheduled_attempts) not in {1, 2}
+            len(scheduled_attempts) not in range(1, 6)
             or len(set(scheduled_attempts)) != len(scheduled_attempts)
             or any(attempt not in range(1, 7) for attempt in scheduled_attempts)
         ):
             raise ValueError(
-                "A deception schedule must contain one or two distinct rows."
+                "A deception schedule must contain one to five distinct rows."
             )
         if daily_puzzle_key is not None:
             connection.execute(
@@ -639,9 +750,19 @@ class Repository:
         connection: sqlite3.Connection,
         game_id: str,
         seed: str,
+        max_events: int,
         created_at: datetime,
     ) -> ReverseEntryState:
         timestamp = created_at.isoformat()
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO reverse_entry_states_v2(
+                game_id, seed, status, trigger_attempt, trigger_reason,
+                consumed_attempt, event_count, max_events, created_at, updated_at
+            ) VALUES (?, ?, 'armed', NULL, NULL, NULL, 0, ?, ?, ?)
+            """,
+            (game_id, seed, max_events, timestamp, timestamp),
+        )
         connection.execute(
             """
             INSERT OR IGNORE INTO reverse_entry_states(
@@ -665,8 +786,8 @@ class Repository:
         row = connection.execute(
             """
             SELECT game_id, seed, status, trigger_attempt, trigger_reason,
-                   consumed_attempt
-            FROM reverse_entry_states
+                   consumed_attempt, event_count, max_events
+            FROM reverse_entry_states_v2
             WHERE game_id = ?
             """,
             (game_id,),
@@ -680,6 +801,8 @@ class Repository:
             trigger_attempt=row["trigger_attempt"],
             trigger_reason=row["trigger_reason"],
             consumed_attempt=row["consumed_attempt"],
+            event_count=row["event_count"],
+            max_events=row["max_events"],
         )
 
     @staticmethod
@@ -692,10 +815,10 @@ class Repository:
     ) -> None:
         connection.execute(
             """
-            UPDATE reverse_entry_states
+            UPDATE reverse_entry_states_v2
             SET status = 'active', trigger_attempt = ?, trigger_reason = ?,
-                updated_at = ?
-            WHERE game_id = ? AND status = 'armed'
+                event_count = event_count + 1, updated_at = ?
+            WHERE game_id = ? AND status = 'armed' AND event_count < max_events
             """,
             (
                 trigger_attempt,
@@ -704,6 +827,15 @@ class Repository:
                 game_id,
             ),
         )
+        connection.execute(
+            """
+            UPDATE reverse_entry_states
+            SET status = 'active', trigger_attempt = ?, trigger_reason = ?,
+                updated_at = ?
+            WHERE game_id = ?
+            """,
+            (trigger_attempt, trigger_reason, updated_at.isoformat(), game_id),
+        )
 
     @staticmethod
     def consume_reverse_entry(
@@ -711,15 +843,48 @@ class Repository:
         game_id: str,
         consumed_attempt: int,
         updated_at: datetime,
+        *,
+        rearm: bool = False,
     ) -> None:
         connection.execute(
             """
-            UPDATE reverse_entry_states
-            SET status = 'consumed', consumed_attempt = ?, updated_at = ?
+            UPDATE reverse_entry_states_v2
+            SET status = ?,
+                trigger_attempt = CASE WHEN ? THEN NULL ELSE trigger_attempt END,
+                trigger_reason = CASE WHEN ? THEN NULL ELSE trigger_reason END,
+                consumed_attempt = CASE WHEN ? THEN NULL ELSE ? END,
+                updated_at = ?
             WHERE game_id = ? AND status = 'active'
             """,
-            (consumed_attempt, updated_at.isoformat(), game_id),
+            (
+                "armed" if rearm else "consumed",
+                rearm,
+                rearm,
+                rearm,
+                consumed_attempt,
+                updated_at.isoformat(),
+                game_id,
+            ),
         )
+        if rearm:
+            connection.execute(
+                """
+                UPDATE reverse_entry_states
+                SET status = 'armed', trigger_attempt = NULL,
+                    trigger_reason = NULL, consumed_attempt = NULL, updated_at = ?
+                WHERE game_id = ?
+                """,
+                (updated_at.isoformat(), game_id),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE reverse_entry_states
+                SET status = 'consumed', consumed_attempt = ?, updated_at = ?
+                WHERE game_id = ?
+                """,
+                (consumed_attempt, updated_at.isoformat(), game_id),
+            )
 
     @staticmethod
     def create_guess_timer_state(
@@ -738,10 +903,27 @@ class Repository:
         status = "skipped" if scheduled_attempt is None else "scheduled"
         connection.execute(
             """
-            INSERT OR IGNORE INTO guess_timer_states(
-                game_id, seed, status, scheduled_attempt, duration_seconds,
+            INSERT OR IGNORE INTO guess_timer_events(
+                game_id, ordinal, seed, status, scheduled_attempt, duration_seconds,
                 starts_at, deadline_at, resolved_attempt, created_at,
                 updated_at
+            ) VALUES (?, 1, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+            """,
+            (
+                game_id,
+                seed,
+                status,
+                scheduled_attempt,
+                duration_seconds,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO guess_timer_states(
+                game_id, seed, status, scheduled_attempt, duration_seconds,
+                starts_at, deadline_at, resolved_attempt, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
             """,
             (
@@ -767,11 +949,15 @@ class Repository:
     ) -> GuessTimerState | None:
         row = connection.execute(
             """
-            SELECT game_id, seed, status, scheduled_attempt,
+            SELECT game_id, ordinal, seed, status, scheduled_attempt,
                    duration_seconds, starts_at, deadline_at,
                    resolved_attempt
-            FROM guess_timer_states
+            FROM guess_timer_events
             WHERE game_id = ?
+            ORDER BY CASE status
+                WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1 ELSE 2 END,
+                scheduled_attempt, ordinal
+            LIMIT 1
             """,
             (game_id,),
         ).fetchone()
@@ -779,6 +965,7 @@ class Repository:
             return None
         return GuessTimerState(
             game_id=row["game_id"],
+            ordinal=row["ordinal"],
             seed=row["seed"],
             status=row["status"],
             scheduled_attempt=row["scheduled_attempt"],
@@ -797,27 +984,128 @@ class Repository:
         )
 
     @staticmethod
+    def list_guess_timer_states(
+        connection: sqlite3.Connection, game_id: str
+    ) -> list[GuessTimerState]:
+        rows = connection.execute(
+            """
+            SELECT game_id, ordinal, seed, status, scheduled_attempt,
+                   duration_seconds, starts_at, deadline_at, resolved_attempt
+            FROM guess_timer_events
+            WHERE game_id = ?
+            ORDER BY ordinal
+            """,
+            (game_id,),
+        ).fetchall()
+        return [
+            GuessTimerState(
+                game_id=row["game_id"],
+                ordinal=row["ordinal"],
+                seed=row["seed"],
+                status=row["status"],
+                scheduled_attempt=row["scheduled_attempt"],
+                duration_seconds=row["duration_seconds"],
+                starts_at=(
+                    datetime.fromisoformat(row["starts_at"])
+                    if row["starts_at"]
+                    else None
+                ),
+                deadline_at=(
+                    datetime.fromisoformat(row["deadline_at"])
+                    if row["deadline_at"]
+                    else None
+                ),
+                resolved_attempt=row["resolved_attempt"],
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def get_guess_timer_for_attempt(
+        connection: sqlite3.Connection, game_id: str, attempt: int
+    ) -> GuessTimerState | None:
+        return next(
+            (
+                state
+                for state in Repository.list_guess_timer_states(connection, game_id)
+                if state.scheduled_attempt == attempt
+            ),
+            None,
+        )
+
+    @staticmethod
+    def create_guess_timer_events(
+        connection: sqlite3.Connection,
+        game_id: str,
+        seed: str,
+        events: tuple[tuple[int, int], ...],
+        created_at: datetime,
+    ) -> list[GuessTimerState]:
+        if not events:
+            Repository.create_guess_timer_state(
+                connection, game_id, seed, None, None, created_at
+            )
+            return Repository.list_guess_timer_states(connection, game_id)
+        timestamp = created_at.isoformat()
+        for ordinal, (attempt, duration) in enumerate(events, start=1):
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO guess_timer_events(
+                    game_id, ordinal, seed, status, scheduled_attempt,
+                    duration_seconds, starts_at, deadline_at, resolved_attempt,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, 'scheduled', ?, ?, NULL, NULL, NULL, ?, ?)
+                """,
+                (game_id, ordinal, seed, attempt, duration, timestamp, timestamp),
+            )
+        first_attempt, first_duration = events[0]
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO guess_timer_states(
+                game_id, seed, status, scheduled_attempt, duration_seconds,
+                starts_at, deadline_at, resolved_attempt, created_at, updated_at
+            ) VALUES (?, ?, 'scheduled', ?, ?, NULL, NULL, NULL, ?, ?)
+            """,
+            (game_id, seed, first_attempt, first_duration, timestamp, timestamp),
+        )
+        return Repository.list_guess_timer_states(connection, game_id)
+
+    @staticmethod
     def activate_guess_timer(
         connection: sqlite3.Connection,
         game_id: str,
+        ordinal: int,
         starts_at: datetime,
         deadline_at: datetime,
         updated_at: datetime,
     ) -> GuessTimerState:
         connection.execute(
             """
-            UPDATE guess_timer_states
+            UPDATE guess_timer_events
             SET status = 'active', starts_at = ?, deadline_at = ?,
                 updated_at = ?
-            WHERE game_id = ? AND status = 'scheduled'
+            WHERE game_id = ? AND ordinal = ? AND status = 'scheduled'
             """,
             (
                 starts_at.isoformat(),
                 deadline_at.isoformat(),
                 updated_at.isoformat(),
                 game_id,
+                ordinal,
             ),
         )
+        if ordinal == 1:
+            connection.execute(
+                """
+                UPDATE guess_timer_states
+                SET status = 'active', starts_at = ?, deadline_at = ?, updated_at = ?
+                WHERE game_id = ? AND status = 'scheduled'
+                """,
+                (
+                    starts_at.isoformat(), deadline_at.isoformat(),
+                    updated_at.isoformat(), game_id,
+                ),
+            )
         state = Repository.get_guess_timer_state(connection, game_id)
         if state is None:
             raise sqlite3.IntegrityError(
@@ -829,23 +1117,34 @@ class Repository:
     def resolve_guess_timer(
         connection: sqlite3.Connection,
         game_id: str,
+        ordinal: int,
         outcome: Literal["completed", "expired"],
         resolved_attempt: int,
         updated_at: datetime,
     ) -> None:
         connection.execute(
             """
-            UPDATE guess_timer_states
+            UPDATE guess_timer_events
             SET status = ?, resolved_attempt = ?, updated_at = ?
-            WHERE game_id = ? AND status = 'active'
+            WHERE game_id = ? AND ordinal = ? AND status = 'active'
             """,
             (
                 outcome,
                 resolved_attempt,
                 updated_at.isoformat(),
                 game_id,
+                ordinal,
             ),
         )
+        if ordinal == 1:
+            connection.execute(
+                """
+                UPDATE guess_timer_states
+                SET status = ?, resolved_attempt = ?, updated_at = ?
+                WHERE game_id = ? AND status = 'active'
+                """,
+                (outcome, resolved_attempt, updated_at.isoformat(), game_id),
+            )
 
     @staticmethod
     def create_blackout_state(

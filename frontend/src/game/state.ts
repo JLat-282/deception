@@ -101,7 +101,7 @@ function timeoutRevealState(
     message: "Time expired.",
     errorScope: null,
     timerActive: null,
-    pendingTimer: null,
+    pendingTimer: isTimedOut(payload) ? (payload.nextTimer ?? null) : null,
     announcement: `Time expired. Guess ${payload.attempt} was consumed.`,
   };
 }
@@ -188,7 +188,10 @@ export function reducer(state: AppState, action: Action): AppState {
       if (isTimedOut(action.payload)) {
         return timeoutRevealState(state, action.payload);
       }
-      if (action.payload.reverseEntry?.state === "resolved") {
+      if (
+        action.payload.reverseEntry?.state === "resolved" ||
+        action.payload.reverseEntry?.state === "continued"
+      ) {
         return {
           ...state,
           phase: "reversing",
@@ -269,7 +272,7 @@ export function reducer(state: AppState, action: Action): AppState {
           message: "",
           reverseEntryActive: false,
           timerActive: null,
-          pendingTimer: null,
+          pendingTimer: state.pendingTimer,
         };
       }
       return {
@@ -277,7 +280,9 @@ export function reducer(state: AppState, action: Action): AppState {
         phase: "ready",
         message: "",
         reverseEntryActive:
-          !isTimedOut(latest) && latest.reverseEntry?.state === "activated"
+          !isTimedOut(latest) &&
+          (latest.reverseEntry?.state === "activated" ||
+            latest.reverseEntry?.state === "continued")
             ? true
             : state.reverseEntryActive,
         timerActive: state.pendingTimer,
@@ -296,16 +301,24 @@ export function reducer(state: AppState, action: Action): AppState {
         announcement: "Blackout. Previous feedback has been erased.",
       };
     }
-    case "BLACKOUT_COMPLETE":
+    case "BLACKOUT_COMPLETE": {
       if (state.phase !== "blackoutOpening") return state;
+      const latest = state.guesses.at(-1);
+      const reverseEntryActive = Boolean(
+        latest &&
+          !isTimedOut(latest) &&
+          (latest.reverseEntry?.state === "activated" ||
+            latest.reverseEntry?.state === "continued"),
+      );
       return {
         ...state,
         phase: "ready",
         message: "",
-        reverseEntryActive: false,
-        timerActive: null,
+        reverseEntryActive,
+        timerActive: state.pendingTimer,
         pendingTimer: null,
       };
+    }
     case "FAILURE":
       if (action.scope === "guess" && action.recoverable !== true) {
         return {

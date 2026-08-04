@@ -83,10 +83,10 @@ function bootstrap(): Promise<BootstrapResponse> {
 
 export const api = {
   bootstrap,
-  startGame: (mode: GameMode) =>
+  startGame: (mode: GameMode, presetKey?: string) =>
     request<StartGameResponse>("/api/games", {
       method: "POST",
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode, ...(presetKey ? { presetKey } : {}) }),
     }),
   submitGuess: (gameId: string, guess: string) =>
     request<AttemptResponse>(`/api/games/${gameId}/guesses`, {

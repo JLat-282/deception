@@ -17,6 +17,7 @@ import { GuessTimer } from "./components/GuessTimer";
 import { HowDeceptionWorks } from "./components/HowDeceptionWorks";
 import { Keyboard } from "./components/Keyboard";
 import { ModeSelect } from "./components/ModeSelect";
+import { PracticeDifficultySelect } from "./components/PracticeDifficultySelect";
 import { buildKeyboardFeedback } from "./game/keyboardState";
 import { waitForRevealStart } from "./game/revealTiming";
 import { initialState, reducer } from "./game/state";
@@ -59,7 +60,12 @@ export default function App() {
   const [firstVisitGuide, setFirstVisitGuide] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
   const [reverseNoticeVisible, setReverseNoticeVisible] = useState(false);
+  const [practiceSelectOpen, setPracticeSelectOpen] = useState(false);
+  const [startingPresetKey, setStartingPresetKey] = useState<string | null>(
+    null,
+  );
   const guideCheckComplete = useRef(false);
+  const practiceButtonRef = useRef<HTMLButtonElement>(null);
 
   const closeHelp = useCallback(() => {
     setHelpOpen(false);
@@ -102,12 +108,14 @@ export default function App() {
     setHelpOpen(true);
   }, [state.bootstrap]);
 
-  const startGame = useCallback(async (mode: GameMode) => {
+  const startGame = useCallback(async (mode: GameMode, presetKey?: string) => {
     setHelpOpen(false);
     setResultOpen(false);
+    setStartingPresetKey(presetKey ?? null);
     dispatch({ type: "STARTING", mode });
     try {
-      const session = await api.startGame(mode);
+      const session = await api.startGame(mode, presetKey);
+      setPracticeSelectOpen(false);
       dispatch({ type: "START_SUCCESS", payload: session });
     } catch (error) {
       dispatch({
@@ -116,6 +124,8 @@ export default function App() {
         message: errorMessage(error),
         recoverable: true,
       });
+    } finally {
+      setStartingPresetKey(null);
     }
   }, []);
 
@@ -308,6 +318,33 @@ export default function App() {
       (state.phase === "error" && state.errorScope === "start")) &&
     state.bootstrap
   ) {
+    const startError = state.phase === "error" ? state.message : undefined;
+    if (practiceSelectOpen) {
+      return (
+        <>
+          <PracticeDifficultySelect
+            presets={state.bootstrap.presets}
+            busy={state.phase === "starting"}
+            selectedPresetKey={startingPresetKey}
+            message={startError}
+            onBack={() => {
+              setPracticeSelectOpen(false);
+              window.requestAnimationFrame(() =>
+                practiceButtonRef.current?.focus(),
+              );
+            }}
+            onHelp={openHelp}
+            onSelect={(presetKey) => void startGame("practice", presetKey)}
+          />
+          {helpOpen ? (
+            <HowDeceptionWorks
+              expandAll={firstVisitGuide}
+              onClose={closeHelp}
+            />
+          ) : null}
+        </>
+      );
+    }
     return (
       <>
         <ModeSelect
@@ -315,7 +352,9 @@ export default function App() {
           busy={state.phase === "starting"}
           message={state.phase === "error" ? state.message : undefined}
           onStart={(mode) => void startGame(mode)}
+          onPractice={() => setPracticeSelectOpen(true)}
           onHelp={openHelp}
+          practiceButtonRef={practiceButtonRef}
         />
         {helpOpen ? (
           <HowDeceptionWorks expandAll={firstVisitGuide} onClose={closeHelp} />
@@ -326,6 +365,7 @@ export default function App() {
 
   if (!state.session) return null;
 
+  const replayPresetKey = state.session.preset.presetKey;
   const latest = state.guesses.at(-1);
   const finished = state.phase === "won" || state.phase === "lost";
   const inputDisabled =
@@ -342,6 +382,11 @@ export default function App() {
     <main className="game-screen">
       <BrandHeader
         mode={state.session.mode}
+        presetName={
+          state.session.mode === "practice"
+            ? state.session.preset.name
+            : undefined
+        }
         helpDisabled={
           state.timerActive !== null ||
           state.phase === "blackoutClosing" ||
@@ -465,7 +510,9 @@ export default function App() {
             attempt={latest.attempt}
             deception={latest.deception}
             onClose={closeResult}
-            onPractice={() => void startGame("practice")}
+            onPractice={() => {
+              void startGame("practice", replayPresetKey);
+            }}
             onModes={() => {
               setResultOpen(false);
               void loadBootstrap();

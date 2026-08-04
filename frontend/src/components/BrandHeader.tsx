@@ -3,6 +3,7 @@ import type { GameMode } from "../api/types";
 
 type BrandHeaderProps = {
   mode?: GameMode;
+  presetName?: string;
   onReturn?: () => void;
   onHelp: () => void;
   helpDisabled?: boolean;
@@ -32,6 +33,7 @@ function HelpButton({
 
 export function BrandHeader({
   mode,
+  presetName,
   onReturn,
   onHelp,
   helpDisabled = false,
@@ -63,7 +65,11 @@ export function BrandHeader({
       </div>
       <div className="game-header-actions">
         <p className={`mode-name mode-name--${mode}`}>
-          {mode === "daily" ? "Daily" : "Practice"}
+          {mode === "daily"
+            ? "Daily"
+            : presetName
+              ? `Practice · ${presetName}`
+              : "Practice"}
         </p>
         <HelpButton onHelp={onHelp} disabled={helpDisabled} />
       </div>

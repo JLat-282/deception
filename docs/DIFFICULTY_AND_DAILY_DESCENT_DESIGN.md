@@ -68,9 +68,9 @@ compatibility rules.
 
 ## Glossary
 
-- **Eligible nonterminal row:** An accepted attempt from one through five whose
-  guess does not solve the answer. Winning guesses and attempt six are never lie
-  opportunities.
+- **Eligible nonterminal row:** An accepted attempt from one through five. A
+  correct answer normally ends the stage, except for Deception's rare, bounded
+  False Victory rule on guesses two through four.
 - **Scheduled lie row:** An attempt index on which the lie planner may alter
   feedback. It may remain truthful if no safe mutation exists or the game ends
   before that attempt.
@@ -81,8 +81,9 @@ compatibility rules.
   or truthful lie fallback does not retroactively make a valid blueprint quiet.
 - **Stage consumption:** The atomic acceptance of the first valid guess for that
   stage. Invalid, incomplete, or rejected submissions do not consume it.
-- **Terminal feedback:** Feedback for a winning guess or the sixth accepted guess.
-  Both the displayed row and postgame truth report are truthful.
+- **Terminal feedback:** Feedback for the accepted guess that ends the stage.
+  Guesses five and six always recognize a correct answer, and attempt six always
+  displays truthful feedback.
 - **Immutable blueprint:** The persisted schedulable challenge created before play.
   It includes seeds for reactive decisions but not their future realized outcomes.
 - **Runtime event:** A deterministic event derived from the immutable blueprint and
@@ -113,11 +114,12 @@ silently change active games.
 |---|---:|---:|---:|---:|
 | Scheduled lie rows | 1 | 1: 20%, 2: 80% | 2: 40%, 3: 60% | 3: 15%, 4: 35%, 5: 50% |
 | Two-tile lie allowance | Never | Never | 25% per lie row | 50% per lie row |
+| False Victory permission | Never | Never | Never | 5% of games; once on guesses 2-4 |
 | Timer events | 25% chance of 1 | 45% chance of 1 | 0: 15%, 1: 55%, 2: 30% | 1: 25%, 2: 45%, 3: 30% |
 | Timer duration | 30s: 100% | 30s: 70%, 10s: 30% | 30s: 50%, 10s: 50% | 30s: 30%, 10s: 70% |
 | Reverse fallback chance | 5% | 10% | 20% | 35% |
 | Maximum Reverse events | 1 | 1 | 2 | 3 |
-| Blackout chance | Disabled | 10% | 20% | 35% |
+| Blackout chance | Disabled | 20% | 45% | 80% |
 | Blackout maximum | 0 | 1 | 1 | 1 |
 
 The existing four-or-five-displayed-gray trigger remains eligible at every
@@ -129,12 +131,14 @@ Version 1 compatibility rules:
   Reverse Entry on collision.
 - `doubt-2@1`: no same-attempt combinations. Blackout reserves its own attempt
   and the following attempt.
-- `doubt-3@1`: Timer and Reverse Entry may combine once per game. Blackout
-  excludes combinations on its own attempt but does not reserve the following
-  attempt. The same punishment may not occur on consecutive attempts.
-- `deception@1`: Timer and Reverse Entry may combine repeatedly. Blackout
-  excludes combinations only on its own attempt. Timer may repeat on adjacent
-  attempts but never on three consecutive attempts.
+- `doubt-3@1`: Timer, Reverse Entry, and Blackout may combine. A 30-second
+  Timer may begin after Blackout finishes opening; a 10-second Timer may not
+  share that transition and is deterministically moved to another eligible
+  turn. Timer and Reverse Entry may occur on consecutive attempts.
+- `deception@1`: Timer, Reverse Entry, and Blackout may combine, including all
+  three from the same completed guess. A Timer begins after the curtain reopens.
+  Timer may repeat on adjacent attempts but never on three consecutive attempts.
+  Reverse Entry may repeat on consecutive attempts.
 
 These numbers are hypotheses for playtesting rather than permanent balance
 promises. Any change creates a new preset version.
@@ -149,6 +153,10 @@ Interpretation notes:
   full-row recolors.
 - Timer and Reverse Entry can appear multiple times in Doubt III and Deception.
 - Repeated Blackout is prohibited even at the highest difficulty.
+- False Victory is independently enabled in 5% of Deception blueprints. It can
+  reject one correct answer only on a scheduled lie row from attempts two through
+  four, requires a plausible mutation, and permanently protects later submissions
+  of that answer.
 
 ### Doubt II version 1 baseline
 
@@ -162,7 +170,7 @@ blueprint must preserve these existing rules until deliberately retuned:
   time.
 - At most one Reverse Entry, triggered by four or five displayed absent tiles or
   the existing 10% fallback roll.
-- At most one Blackout, scheduled in 10% of games on attempt three, four, or five.
+- At most one Blackout, scheduled in 20% of games on attempt three, four, or five.
 - Timer and Reverse Entry do not affect the same guess.
 - Blackout excludes Timer and Reverse Entry on its attempt and the immediately
   following attempt.
@@ -249,8 +257,8 @@ Initial direction:
   Reverse Entry, while still obeying hard fairness constraints.
 - Blackout remains a transition and information punishment, not a repeating event.
 
-The exact Doubt III and Deception allowlists remain open until the first tuning
-workshop.
+The Doubt III allowlist is implemented as specified above. Deception's broader
+allowlist remains open until its tuning workshop.
 
 ## Hybrid Fairness Standard
 
@@ -529,8 +537,9 @@ active API responses.
 ### Milestone 2: Higher-level mechanics
 
 Add repeated Timer and Reverse Entry support, coordinated two-tile lies, and the
-versioned compatibility matrix. Acceptance requires bounded lie-planner latency and
-complete cap/combination tests for Doubt III and Deception.
+versioned compatibility matrix for Doubt III and Deception. Acceptance requires
+bounded lie-planner latency plus cap, overlap, consecutive-event, fallback, and
+False Victory recovery tests.
 
 ### Milestone 3: Daily Descent
 
@@ -547,18 +556,8 @@ stage outcome storage is required earlier.
 
 ## Open Questions
 
-- Exact minimum and maximum punishment counts for each preset.
-- Timer duration distribution at each preset.
-- Blackout weights in Doubt III and Deception. Doubt II remains fixed at 10% in
-  `doubt-2@1`; any later change requires `doubt-2@2`.
-- Timer duration weights outside `doubt-2@1`.
-- The initial Doubt III and Deception combination allowlists.
-- Cooldown and adjacency rules above Doubt II.
-- Whether lie-opportunity counts are fixed ranges or weighted distributions inside
-  those ranges.
 - The minimum acceptable expert sample size before adjusting Deception's target band.
 - Accessible equivalents for combined time and input-order pressure.
-- Final player-facing preset descriptions and selection-screen treatment.
 - Seasonal boundaries and scoring if leaderboards are implemented.
 
 ## Success Criteria
@@ -579,13 +578,12 @@ stage outcome storage is required earlier.
 
 ## Implementation Readiness Gate
 
-This document approves the product structure and Architecture B. It becomes an
-implementation specification only after Milestone 0 fills every numeric and
-compatibility field and the resulting `preset@version` rows receive review. Open
-probabilities must never be silently replaced with engineering defaults.
+Milestones 0 through 2 are complete for Practice. The approved version 1 matrix
+is the implementation specification for the preset registry, and all four
+difficulties are executable. Deception remains Practice-only until Daily Descent
+is implemented.
 
 ## Next Workshop Assignment
 
-Fill the first numeric tuning matrix for each preset: punishment count ranges, timer
-durations, Blackout weights, cooldowns, and the Doubt III/Deception combination
-allowlists. Treat every number as a playtest hypothesis rather than a permanent rule.
+Playtest Deception's broad overlap and rare False Victory recovery, then begin
+Daily Descent using the four existing versioned presets.

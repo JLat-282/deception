@@ -10,12 +10,21 @@ const bootstrap: BootstrapResponse = {
     availability: "available",
     resetAt: "2026-07-29T03:00:00Z",
   },
+  presets: [],
 };
 
 const session: StartGameResponse = {
   gameId: "game-1",
   mode: "practice",
   config: bootstrap.config,
+  preset: {
+    presetKey: "doubt-2@1",
+    name: "Doubt II",
+    rank: 2,
+    pressure: "Standard",
+    description: "The complete standard Deception experience.",
+    available: true,
+  },
 };
 
 describe("app state machine", () => {
@@ -144,6 +153,40 @@ describe("app state machine", () => {
     expect(resumed.timerActive).toBeNull();
   });
 
+  it("starts a consecutive timer after a timed turn is consumed", () => {
+    const ready = {
+      ...initialState,
+      phase: "ready" as const,
+      bootstrap,
+      session,
+      timerActive: {
+        state: "activated" as const,
+        durationSeconds: 10 as const,
+        startsAt: "2026-07-28T12:00:01Z",
+        deadlineAt: "2026-07-28T12:00:11Z",
+      },
+    };
+    const timeoutReveal = reducer(ready, {
+      type: "TIMEOUT_SUCCESS",
+      payload: {
+        timedOut: true,
+        attempt: 2,
+        status: "playing",
+        timer: { state: "expired" },
+        nextTimer: {
+          state: "activated",
+          durationSeconds: 30,
+          startsAt: "2026-07-28T12:00:12Z",
+          deadlineAt: "2026-07-28T12:00:42Z",
+        },
+      },
+    });
+    const resumed = reducer(timeoutReveal, { type: "REVEAL_COMPLETE" });
+
+    expect(resumed.phase).toBe("ready");
+    expect(resumed.timerActive?.durationSeconds).toBe(30);
+  });
+
   it("runs Blackout after feedback and erases information through that row", () => {
     const ready = {
       ...initialState,
@@ -174,6 +217,13 @@ describe("app state machine", () => {
         attempt: 3,
         status: "playing",
         blackout: { state: "activated" },
+        reverseEntry: { state: "activated" },
+        timer: {
+          state: "activated",
+          durationSeconds: 30,
+          startsAt: "2026-07-28T12:00:02Z",
+          deadlineAt: "2026-07-28T12:00:32Z",
+        },
       },
     });
     const closing = reducer(revealing, { type: "REVEAL_COMPLETE" });
@@ -188,5 +238,7 @@ describe("app state machine", () => {
       "Blackout. Previous feedback has been erased.",
     );
     expect(resumed.phase).toBe("ready");
+    expect(resumed.reverseEntryActive).toBe(true);
+    expect(resumed.timerActive?.durationSeconds).toBe(30);
   });
 });

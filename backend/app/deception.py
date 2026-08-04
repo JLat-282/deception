@@ -23,17 +23,21 @@ class VisibleGuess:
 @dataclass(frozen=True)
 class DeceptionDecision:
     feedback: str
-    tile_index: int | None = None
+    tile_indexes: tuple[int, ...] = ()
 
     @property
     def activated(self) -> bool:
-        return self.tile_index is not None
+        return bool(self.tile_indexes)
+
+    @property
+    def tile_index(self) -> int | None:
+        return self.tile_indexes[0] if self.tile_indexes else None
 
 
 @dataclass(frozen=True)
 class _Candidate:
     feedback: str
-    tile_index: int
+    tile_indexes: tuple[int, ...]
     tactic: Tactic
     decoy_count: int
 
@@ -43,7 +47,7 @@ DEFAULT_DECISION_BUDGET_MS = 100
 
 
 class DeceptionEngine:
-    """Choose a believable one-tile feedback lie without changing truth rules."""
+    """Choose believable feedback lies without changing truth rules."""
 
     def __init__(self, truth_engine: TruthEngine) -> None:
         self.truth_engine = truth_engine
@@ -115,6 +119,7 @@ class DeceptionEngine:
         seed: str,
         excluded_tile_indexes: Collection[int] = (),
         allow_constraint_fallback: bool = True,
+        max_false_tiles: int = 1,
         time_budget_ms: int | None = DEFAULT_DECISION_BUDGET_MS,
     ) -> DeceptionDecision:
         deadline = (
@@ -138,38 +143,37 @@ class DeceptionEngine:
             pattern_counts[self.truth_engine.evaluate(guess, answer)] += 1
 
         candidates: list[_Candidate] = []
-        for tile_index, truth_marker in enumerate(truth_feedback):
-            if self._budget_expired(deadline):
-                return DeceptionDecision(feedback=truth_feedback)
-            if tile_index in excluded_tile_indexes:
-                continue
-            for display_marker in ("G", "Y", "B"):
-                if display_marker == truth_marker:
-                    continue
-                mutation = (
-                    truth_feedback[:tile_index]
-                    + display_marker
-                    + truth_feedback[tile_index + 1 :]
+        target_sizes = tuple(range(min(2, max_false_tiles), 0, -1))
+        for target_size in target_sizes:
+            for mutation, decoy_count in pattern_counts.items():
+                if self._budget_expired(deadline):
+                    return DeceptionDecision(feedback=truth_feedback)
+                tile_indexes = tuple(
+                    index
+                    for index, markers in enumerate(zip(truth_feedback, mutation))
+                    if markers[0] != markers[1]
                 )
-                if mutation == "GGGGG":
+                if (
+                    len(tile_indexes) != target_size
+                    or mutation == "GGGGG"
+                    or any(index in excluded_tile_indexes for index in tile_indexes)
+                ):
                     continue
-                decoy_count = pattern_counts.get(mutation, 0)
-                if decoy_count == 0:
-                    continue
-                tactic: Tactic = (
-                    "fabricate"
-                    if _MARKER_RANK[display_marker]
-                    > _MARKER_RANK[truth_marker]
-                    else "hide"
+                rank_delta = sum(
+                    _MARKER_RANK[mutation[index]]
+                    - _MARKER_RANK[truth_feedback[index]]
+                    for index in tile_indexes
                 )
                 candidates.append(
                     _Candidate(
                         feedback=mutation,
-                        tile_index=tile_index,
-                        tactic=tactic,
+                        tile_indexes=tile_indexes,
+                        tactic="fabricate" if rank_delta >= 0 else "hide",
                         decoy_count=decoy_count,
                     )
                 )
+            if candidates:
+                break
 
         if not candidates:
             if not allow_constraint_fallback:
@@ -210,13 +214,13 @@ class DeceptionEngine:
                 seed,
                 (
                     f"candidate:v1:{candidate.feedback}:"
-                    f"{candidate.tile_index}"
+                    f"{','.join(str(index) for index in candidate.tile_indexes)}"
                 ),
             ),
         )
         return DeceptionDecision(
             feedback=selected.feedback,
-            tile_index=selected.tile_index,
+            tile_indexes=selected.tile_indexes,
         )
 
     def _constraint_backed_feedback(
@@ -284,7 +288,7 @@ class DeceptionEngine:
             candidates.append(
                 _Candidate(
                     feedback=mutation,
-                    tile_index=tile_index,
+                    tile_indexes=(tile_index,),
                     tactic="fabricate",
                     decoy_count=self._yellow_support[tile_index].get(
                         letter, 0
@@ -309,11 +313,11 @@ class DeceptionEngine:
                 seed,
                 (
                     f"constraint-candidate:v1:{candidate.feedback}:"
-                    f"{candidate.tile_index}"
+                    f"{candidate.tile_indexes[0]}"
                 ),
             ),
         )
         return DeceptionDecision(
             feedback=selected.feedback,
-            tile_index=selected.tile_index,
+            tile_indexes=selected.tile_indexes,
         )

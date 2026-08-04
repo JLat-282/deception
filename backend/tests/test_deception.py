@@ -66,6 +66,27 @@ def test_fabricated_feedback_changes_exactly_one_tile() -> None:
     assert decision.feedback != "GGGGG"
 
 
+def test_two_tile_lie_prefers_a_jointly_supported_decoy_pattern() -> None:
+    truth_engine = full_engine()
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("slate", "crane")
+
+    decision = deception.choose_feedback(
+        guess="slate",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="two-tile",
+        max_false_tiles=2,
+        time_budget_ms=None,
+    )
+
+    assert len(decision.tile_indexes) == 2
+    assert changed_indexes(truth, decision.feedback) == list(
+        decision.tile_indexes
+    )
+
+
 def test_decision_budget_falls_back_to_truthful_feedback() -> None:
     truth_engine = full_engine()
     deception = DeceptionEngine(truth_engine)

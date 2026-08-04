@@ -14,8 +14,9 @@ The app supports:
 - A shared Daily puzzle that resets at 03:00 UTC.
 - One anonymous-browser Daily attempt, consumed by the first accepted guess.
 - Practice games with a fresh answer and unrestricted replay.
+- Four versioned Practice difficulty presets, from Doubt I through Deception.
 - Standard repeated-letter Wordle evaluation.
-- A hidden one-or-two-row schedule in both Daily and Practice.
+- A hidden preset-owned lie and punishment blueprint persisted with each game.
 - Feedback-only lies that preserve submitted letters and tile positions.
 - A postgame audit of every activated or avoided opportunity.
 - Keyboard, mouse, and touch input with non-color-only feedback.
@@ -86,6 +87,12 @@ FastAPI HTTP/API shell
         +--> curated words and answers
 ```
 
+The backend owns a versioned preset registry and generates a deterministic,
+immutable challenge blueprint before play. Games persist their exact preset key
+and blueprint so later balance changes cannot rewrite an active game. Public API
+responses expose only names, descriptions, rank, and availability; schedules and
+probabilities remain server-only.
+
 The database stores `truth_feedback` and `display_feedback` separately. The
 truth engine remains the only source of Wordle evaluation. On a selected row,
 the deception planner first seeks feedback supported by a plausible alternative
@@ -98,7 +105,22 @@ possible lie timing. Practice schedules are stored per game. Schema upgrades
 preserve existing data: pre-deception games finish truthfully, while games
 already using the one-row rules keep their stored schedule.
 
-## Deception behavior
+## Current preset behavior
+
+- Doubt I provides one possible lie row, lighter Timer and Reverse Entry odds,
+  no Blackout, and at most one punishment.
+- Doubt II preserves the complete existing rules described below.
+- Doubt III adds two or three possible lie rows, occasional coordinated
+  two-tile lies, repeated Timers and Reverse Entry, and controlled punishment
+  overlap.
+- Deception adds three to five possible lie rows, broader punishment overlap,
+  up to three Timers and Reverse Entry events, and a rare False Victory threat.
+- Daily remains pinned to `doubt-2@1` during this milestone.
+
+The complete tuning matrix and delivery boundary live in
+`docs/DIFFICULTY_AND_DAILY_DESCENT_DESIGN.md`.
+
+### Doubt II
 
 - One row is scheduled 20% of the time and two distinct rows are scheduled 80%
   of the time.
@@ -114,6 +136,32 @@ already using the one-row rules keep their stored schedule.
 - Two activated lies never reuse the same tile position.
 - The terminal response reveals every selected row and whether it lied.
 
+### Doubt III
+
+- Two lie rows are scheduled 40% of the time and three are scheduled 60% of
+  the time.
+- Each scheduled row has a 25% chance to seek a jointly plausible two-tile
+  lie. The planner falls back to one tile, then truthful feedback, when needed.
+- Timer and Reverse Entry may each occur up to twice, including on consecutive
+  turns.
+- Punishments may overlap. A 30-second Timer may begin after Blackout's curtain;
+  a 10-second Timer is moved to another eligible turn instead.
+- Blackout remains limited to once per game, and winning guesses cancel newly
+  scheduled punishments.
+
+### Deception
+
+- Three, four, or five lie rows are scheduled, with a 50% chance per row to
+  seek a coordinated two-tile lie.
+- Every game receives at least one Timer and may receive as many as three, but
+  never on three consecutive guesses.
+- Timer, Reverse Entry, and Blackout may overlap. Timers begin only after the
+  Blackout curtain has reopened.
+- In 5% of games, one correct answer on guesses two through four may receive
+  plausible false feedback when it lands on a scheduled lie row. Any later
+  submission of that answer is guaranteed to win.
+- Guesses five and six always recognize the correct answer.
+
 ## Punishment behavior
 
 - Reverse Entry may require the next accepted word to be typed backwards.
@@ -125,7 +173,7 @@ already using the one-row rules keep their stored schedule.
   stop or reset the countdown.
 - Expiration consumes the current attempt and records a `Time expired` row
   without creating fake feedback.
-- Each game has a 10% chance to schedule Blackout after attempt three, four, or
+- Doubt II has a 20% chance to schedule Blackout after attempt three, four, or
   five, with each attempt equally likely.
 - Blackout erases accumulated color feedback and resets the keyboard. Future
   guesses reveal normally, and the full board returns after the game ends.

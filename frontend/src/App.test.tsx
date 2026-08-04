@@ -10,7 +10,50 @@ const bootstrap = {
     availability: "available",
     resetAt: "2026-07-29T03:00:00Z",
   },
+  presets: [
+    {
+      presetKey: "doubt-1@1",
+      name: "Doubt I",
+      rank: 1,
+      pressure: "Uneasy",
+      description: "A measured first step into uncertainty.",
+      available: true,
+    },
+    {
+      presetKey: "doubt-2@1",
+      name: "Doubt II",
+      rank: 2,
+      pressure: "Unsettling",
+      description: "The familiar rules begin to push back.",
+      available: true,
+    },
+    {
+      presetKey: "doubt-3@1",
+      name: "Doubt III",
+      rank: 3,
+      pressure: "Severe",
+      description: "Relentless pressure rewards careful play.",
+      available: true,
+    },
+    {
+      presetKey: "deception@1",
+      name: "Deception",
+      rank: 4,
+      pressure: "Merciless",
+      description: "Nothing is offered without a cost.",
+      available: true,
+    },
+  ],
 };
+
+async function startPractice(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Play Practice" }));
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Play Practice on Doubt II",
+    }),
+  );
+}
 
 const storage = new Map<string, string>();
 const localStorageMock = {
@@ -75,13 +118,15 @@ describe("App", () => {
   });
 
   it("completes the keyboard-driven practice win flow", async () => {
-    vi.spyOn(globalThis, "fetch")
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(bootstrap))
       .mockResolvedValueOnce(
         jsonResponse({
           gameId: "practice-game",
           mode: "practice",
           config: bootstrap.config,
+          preset: bootstrap.presets[1],
         }),
       )
       .mockResolvedValueOnce(
@@ -104,10 +149,12 @@ describe("App", () => {
       );
 
     render(<App />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Play Practice" }),
-    );
+    await startPractice();
     await screen.findByText("0 of 6 guesses");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      mode: "practice",
+      presetKey: "doubt-2@1",
+    });
 
     for (const letter of "crane") {
       fireEvent.keyDown(window, { key: letter });
@@ -190,13 +237,12 @@ describe("App", () => {
           gameId: "practice-game",
           mode: "practice",
           config: bootstrap.config,
+          preset: bootstrap.presets[1],
         }),
       );
 
     render(<App />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Play Practice" }),
-    );
+    await startPractice();
     await screen.findByText("0 of 6 guesses");
 
     for (const letter of "cat") {
@@ -232,6 +278,7 @@ describe("App", () => {
           gameId: "practice-game",
           mode: "practice",
           config: bootstrap.config,
+          preset: bootstrap.presets[1],
         }),
       )
       .mockResolvedValueOnce(
@@ -247,9 +294,7 @@ describe("App", () => {
       );
 
     render(<App />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Play Practice" }),
-    );
+    await startPractice();
     await screen.findByText("0 of 6 guesses");
     for (const letter of "zzzzz") {
       fireEvent.keyDown(window, { key: letter });
@@ -277,6 +322,7 @@ describe("App", () => {
           gameId: "practice-game",
           mode: "practice",
           config: bootstrap.config,
+          preset: bootstrap.presets[1],
         }),
       )
       .mockResolvedValueOnce(
@@ -295,9 +341,7 @@ describe("App", () => {
       );
 
     render(<App />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Play Practice" }),
-    );
+    await startPractice();
     await screen.findByText("0 of 6 guesses");
     for (const letter of "slate") {
       fireEvent.keyDown(window, { key: letter });
@@ -321,6 +365,7 @@ describe("App", () => {
           gameId: "practice-game",
           mode: "practice",
           config: bootstrap.config,
+          preset: bootstrap.presets[1],
         }),
       )
       .mockResolvedValueOnce(
@@ -344,9 +389,7 @@ describe("App", () => {
       );
 
     render(<App />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Play Practice" }),
-    );
+    await startPractice();
     await screen.findByText("0 of 6 guesses");
 
     for (const letter of "fight") {
@@ -388,6 +431,7 @@ describe("App", () => {
           gameId: "practice-game",
           mode: "practice",
           config: bootstrap.config,
+          preset: bootstrap.presets[1],
         }),
       )
       .mockResolvedValueOnce(
@@ -412,9 +456,7 @@ describe("App", () => {
       );
 
     render(<App />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Play Practice" }),
-    );
+    await startPractice();
     await screen.findByText("0 of 6 guesses");
     for (const letter of "fight") {
       fireEvent.keyDown(window, { key: letter });

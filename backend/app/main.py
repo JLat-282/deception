@@ -142,7 +142,9 @@ def create_app(
         response: Response,
     ) -> StartGameResponse:
         return service.start_game(
-            device_id_for(request, response), payload.mode
+            device_id_for(request, response),
+            payload.mode,
+            payload.preset_key,
         )
 
     @app.post(

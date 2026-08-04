@@ -16,6 +16,13 @@ describe("HowDeceptionWorks", () => {
     expect(
       screen.getByText(/Feedback may lie more than once/),
     ).toBeInTheDocument();
+    expect(screen.getByText(/one or two tiles/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/correct answer can also be rejected/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Difficulties" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Possible punishments")).toBeInTheDocument();
     expect(screen.getByText("Reverse Entry")).toBeInTheDocument();
     expect(screen.getByText("Guess Timer")).toBeInTheDocument();

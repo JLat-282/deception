@@ -34,24 +34,34 @@ export function HowDeceptionWorks({
             <section>
               <h3>The rule</h3>
               <p>
-                Rows are selected in secret. If a row lies, only one tile in
-                that row can show the wrong color. Feedback may lie more than
-                once.
+                Rows are selected in secret. Depending on the difficulty, one or
+                two tiles in a selected row may show the wrong color. Feedback
+                may lie more than once.
               </p>
             </section>
             <section>
               <h3>What can lie</h3>
               <p>
                 Only feedback can lie. Letters never change or move. A lie can
-                hide a real clue or create a convincing false one. A winning
-                guess is always truthful.
+                hide a real clue or create a convincing false one. On Deception,
+                a rare early correct answer can also be rejected, but the answer
+                cannot be rejected twice and later submissions of that answer
+                are protected.
               </p>
             </section>
             <section>
               <h3>Modes</h3>
               <p>
                 Daily: one shared word, one attempt. Practice: a fresh word
-                every game, replay anytime. Deception works the same in both.
+                every game, replay anytime, with your choice of difficulty.
+              </p>
+            </section>
+            <section>
+              <h3>Difficulties</h3>
+              <p>
+                Doubt I introduces uncertain feedback. Doubt II adds the full
+                standard pressure. Doubt III allows repeated and overlapping
+                threats. Deception combines the strongest lies and punishments.
               </p>
             </section>
             <section>

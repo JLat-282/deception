@@ -316,6 +316,197 @@ button:disabled {
   font-size: 0.93rem;
 }
 
+.difficulty-selection {
+  width: min(1180px, calc(100% - 2rem));
+  margin: clamp(1.25rem, 3vh, 2.25rem) auto 4rem;
+}
+
+.difficulty-back {
+  display: inline-flex;
+  min-height: 44px;
+  padding: 0.55rem 0.75rem;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.difficulty-back:not(:disabled):hover {
+  color: var(--text);
+}
+
+.difficulty-intro {
+  max-width: 680px;
+  margin: 0.4rem auto 1.75rem;
+  text-align: center;
+}
+
+.difficulty-eyebrow {
+  margin: 0 0 0.4rem;
+  color: var(--violet);
+  font-size: 0.83rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.difficulty-intro h2 {
+  margin: 0;
+  font-family: "Cormorant Garamond", serif;
+  font-size: clamp(2.4rem, 5vw, 4.2rem);
+  font-weight: 600;
+  line-height: 0.95;
+}
+
+.difficulty-intro > p:last-child {
+  margin: 0.8rem auto 0;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.difficulty-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(0.8rem, 1.6vw, 1.2rem);
+}
+
+.difficulty-card {
+  --difficulty-accent: #78558f;
+  --difficulty-accent-text: #cda8df;
+
+  position: relative;
+  display: flex;
+  min-height: 330px;
+  padding: 1.4rem;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid
+    color-mix(in srgb, var(--difficulty-accent) 68%, var(--border));
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--difficulty-accent) 13%, transparent),
+      transparent 48%
+    ),
+    rgb(12 10 14 / 94%);
+  box-shadow: var(--shadow-panel);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.difficulty-card::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  content: "";
+  background: var(--difficulty-accent);
+}
+
+.difficulty-card--rank-1 {
+  --difficulty-accent: #86619e;
+  --difficulty-accent-text: #cda8df;
+}
+.difficulty-card--rank-2 {
+  --difficulty-accent: #9b4271;
+  --difficulty-accent-text: #e39abe;
+}
+.difficulty-card--rank-3 {
+  --difficulty-accent: #b42e4d;
+  --difficulty-accent-text: #f18ca0;
+}
+.difficulty-card--rank-4 {
+  --difficulty-accent: #e12541;
+  --difficulty-accent-text: #ff8a9a;
+}
+
+.difficulty-card:not(:disabled):hover {
+  border-color: var(--difficulty-accent);
+  transform: translateY(-3px);
+}
+
+.difficulty-card:disabled {
+  background: rgb(12 10 14 / 74%);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.difficulty-card__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.difficulty-card__rank,
+.difficulty-card__pressure {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.difficulty-card__rank {
+  color: var(--difficulty-accent-text);
+}
+
+.difficulty-card__pressure {
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.difficulty-card h3 {
+  margin: 2.4rem 0 0.75rem;
+  color: var(--text);
+  font-family: "Cormorant Garamond", serif;
+  font-size: clamp(2rem, 3vw, 2.75rem);
+  font-weight: 600;
+  line-height: 0.95;
+}
+
+.difficulty-card__description {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.94rem;
+  line-height: 1.55;
+}
+
+.difficulty-card__action {
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  margin-top: auto;
+  padding: 0.7rem 1rem;
+  place-items: center;
+  color: #fff;
+  border: 1px solid var(--difficulty-accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--difficulty-accent) 75%, #180b13);
+  font-weight: 700;
+}
+
+.difficulty-card:not(:disabled):hover .difficulty-card__action {
+  background: var(--difficulty-accent);
+}
+
+.difficulty-card:disabled .difficulty-card__action {
+  color: var(--text-dim);
+  border-color: var(--border-soft);
+  background: var(--surface);
+  opacity: 1;
+}
+
 .brand-header--game {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -1215,6 +1406,10 @@ button:disabled {
 }
 
 @media (max-width: 900px) {
+  .difficulty-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .guess-timer {
     width: min(20rem, 100%);
   }
@@ -1247,6 +1442,14 @@ button:disabled {
 
   .mode-option {
     min-height: 360px;
+  }
+
+  .difficulty-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .difficulty-card {
+    min-height: 285px;
   }
 
   .brand-header--game {
@@ -1393,6 +1596,14 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .difficulty-card,
+  .difficulty-card__action {
+    transition: none;
+  }
+
+  .difficulty-card:not(:disabled):hover {
+    transform: none;
+  }
   :root *,
   :root *::before,
   :root *::after {

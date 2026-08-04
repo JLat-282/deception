@@ -36,8 +36,16 @@ export function GameResult({
 
   const deceptionSummary = (event: DeceptionEvent): string => {
     if (event.outcome === "activated") {
-      const { change } = event;
-      return `Row ${event.scheduledAttempt} lied. ${change.letter.toUpperCase()} was shown as ${feedbackText[change.displayedFeedback]}. It was actually ${feedbackText[change.truthfulFeedback]}.`;
+      if (event.kind === "falseVictory") {
+        return `Row ${event.scheduledAttempt} was the answer, but Deception rejected it.`;
+      }
+      const details = event.changes
+        .map(
+          (change) =>
+            `${change.letter.toUpperCase()} was shown as ${feedbackText[change.displayedFeedback]} but was actually ${feedbackText[change.truthfulFeedback]}`,
+        )
+        .join("; ");
+      return `Row ${event.scheduledAttempt} lied on ${event.changes.length === 1 ? "one tile" : "two tiles"}. ${details}.`;
     }
     if (event.reason === "notReached") {
       return `Row ${event.scheduledAttempt} was selected, but you finished before reaching it.`;

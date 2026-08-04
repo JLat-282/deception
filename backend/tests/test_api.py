@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import json
 import sqlite3
 
 from fastapi.testclient import TestClient
 
 from backend.app.config import DEFAULT_DATA_DIR, Settings
+from backend.app.difficulty import BlueprintOverrides
 from backend.app.main import create_app
 
 
@@ -15,6 +17,291 @@ def start_game(client: TestClient, mode: str = "practice") -> dict:
     response = client.post("/api/games", json={"mode": mode})
     assert response.status_code == 200
     return response.json()
+
+
+def test_doubt_three_executes_repeated_overlapping_events(
+    settings: Settings, clock, monkeypatch
+) -> None:
+    advanced = replace(
+        settings,
+        db_path=settings.db_path.with_name("doubt-three.sqlite"),
+        fixed_lie_row=None,
+        fixed_lie_rows=None,
+        reverse_entry_enabled=True,
+        fixed_reverse_entry_roll=0.0,
+        guess_timer_enabled=True,
+        blackout_enabled=True,
+    )
+    app = create_app(settings=advanced, now_provider=clock)
+    monkeypatch.setattr(
+        app.state.service,
+        "_blueprint_overrides",
+        lambda: BlueprintOverrides(
+            lie_attempts=(1, 2, 3),
+            lie_tile_counts=(2, 1, 1),
+            timer_attempts=(2, 4),
+            timer_durations=(10, 30),
+            blackout_roll=0.0,
+            blackout_attempt=3,
+            timer_enabled=True,
+            reverse_enabled=True,
+            blackout_enabled=True,
+        ),
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/games",
+            json={"mode": "practice", "presetKey": "doubt-3@1"},
+        ).json()
+        game_id = started["gameId"]
+        first = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "slate"}
+        ).json()
+        second = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "ykcip"}
+        ).json()
+        third = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "duolc"}
+        ).json()
+        final = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "crane"}
+        ).json()
+
+    assert first["timer"]["durationSeconds"] == 10
+    assert first["reverseEntry"] == {"state": "activated"}
+    assert second["timer"] == {"state": "completed"}
+    assert second["reverseEntry"] == {"state": "continued"}
+    assert third["blackout"] == {"state": "activated"}
+    assert third["timer"]["durationSeconds"] == 30
+    assert third["reverseEntry"] == {"state": "resolved"}
+    assert final["status"] == "won"
+    assert final["timer"] == {"state": "completed"}
+    assert len(final["deception"]["events"]) == 3
+    assert len(final["deception"]["events"][0]["changes"]) == 2
+
+    with sqlite3.connect(advanced.db_path) as connection:
+        timers = connection.execute(
+            """
+            SELECT status FROM guess_timer_events
+            WHERE game_id = ? ORDER BY ordinal
+            """,
+            (game_id,),
+        ).fetchall()
+        reverse = connection.execute(
+            """
+            SELECT status, event_count, max_events
+            FROM reverse_entry_states_v2 WHERE game_id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+
+    assert timers == [("completed",), ("completed",)]
+    assert reverse == ("consumed", 2, 2)
+
+
+def test_doubt_three_timer_expiry_can_activate_a_consecutive_timer(
+    settings: Settings, clock, monkeypatch
+) -> None:
+    advanced = replace(
+        settings,
+        db_path=settings.db_path.with_name("consecutive-timers.sqlite"),
+        fixed_lie_row=None,
+        fixed_lie_rows=None,
+        guess_timer_enabled=True,
+    )
+    app = create_app(settings=advanced, now_provider=clock)
+    monkeypatch.setattr(
+        app.state.service,
+        "_blueprint_overrides",
+        lambda: BlueprintOverrides(
+            lie_attempts=(5,),
+            timer_attempts=(2, 3),
+            timer_durations=(10, 30),
+            timer_enabled=True,
+            reverse_enabled=False,
+            blackout_enabled=False,
+        ),
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/games",
+            json={"mode": "practice", "presetKey": "doubt-3@1"},
+        ).json()
+        game_id = started["gameId"]
+        first = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "slate"}
+        ).json()
+        clock.current += timedelta(seconds=12)
+        expired = client.post(
+            f"/api/games/{game_id}/timer/expire"
+        )
+        duplicate = client.post(
+            f"/api/games/{game_id}/timer/expire"
+        )
+
+    assert first["timer"]["durationSeconds"] == 10
+    assert expired.status_code == 200
+    assert expired.json()["attempt"] == 2
+    assert expired.json()["nextTimer"]["durationSeconds"] == 30
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "TIMER_STILL_RUNNING"
+
+
+def test_deception_can_reject_one_early_correct_answer_then_guarantees_recovery(
+    settings: Settings, clock, monkeypatch
+) -> None:
+    advanced = replace(
+        settings,
+        db_path=settings.db_path.with_name("false-victory.sqlite"),
+        fixed_lie_row=None,
+        fixed_lie_rows=None,
+        reverse_entry_enabled=False,
+        guess_timer_enabled=False,
+        blackout_enabled=False,
+    )
+    app = create_app(settings=advanced, now_provider=clock)
+    monkeypatch.setattr(
+        app.state.service,
+        "_blueprint_overrides",
+        lambda: BlueprintOverrides(
+            lie_attempts=(2,),
+            lie_tile_counts=(2,),
+            false_victory_enabled=True,
+            timer_enabled=False,
+            reverse_enabled=False,
+            blackout_enabled=False,
+        ),
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/games",
+            json={"mode": "practice", "presetKey": "deception@1"},
+        ).json()
+        game_id = started["gameId"]
+        client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "fight"}
+        )
+        rejected = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "crane"}
+        ).json()
+        recovered = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "crane"}
+        ).json()
+
+    assert rejected["status"] == "playing"
+    assert rejected["feedback"] != "GGGGG"
+    assert "answer" not in rejected
+    assert recovered["status"] == "won"
+    assert recovered["answer"] == "crane"
+    assert recovered["deception"]["events"][0]["kind"] == "falseVictory"
+    assert recovered["deception"]["events"][0]["scheduledAttempt"] == 2
+
+
+def test_deception_never_rejects_a_correct_fifth_guess(
+    settings: Settings, clock, monkeypatch
+) -> None:
+    advanced = replace(
+        settings,
+        db_path=settings.db_path.with_name("protected-fifth-guess.sqlite"),
+        fixed_lie_row=None,
+        fixed_lie_rows=None,
+        reverse_entry_enabled=False,
+        guess_timer_enabled=False,
+        blackout_enabled=False,
+    )
+    app = create_app(settings=advanced, now_provider=clock)
+    monkeypatch.setattr(
+        app.state.service,
+        "_blueprint_overrides",
+        lambda: BlueprintOverrides(
+            lie_attempts=(5,),
+            lie_tile_counts=(2,),
+            false_victory_enabled=True,
+            timer_enabled=False,
+            reverse_enabled=False,
+            blackout_enabled=False,
+        ),
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/games",
+            json={"mode": "practice", "presetKey": "deception@1"},
+        ).json()
+        game_id = started["gameId"]
+        for guess in ("slate", "fight", "mould", "berry"):
+            response = client.post(
+                f"/api/games/{game_id}/guesses", json={"guess": guess}
+            )
+            assert response.json()["status"] == "playing"
+        final = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "crane"}
+        ).json()
+
+    assert final["attempt"] == 5
+    assert final["status"] == "won"
+    assert final["feedback"] == "GGGGG"
+    assert final["deception"]["events"][0]["reason"] == "winningGuess"
+
+
+def test_deception_can_overlap_blackout_reverse_and_ten_second_timer(
+    settings: Settings, clock, monkeypatch
+) -> None:
+    advanced = replace(
+        settings,
+        db_path=settings.db_path.with_name("broad-overlap.sqlite"),
+        fixed_lie_row=None,
+        fixed_lie_rows=None,
+        reverse_entry_enabled=True,
+        fixed_reverse_entry_roll=0.0,
+        guess_timer_enabled=True,
+        blackout_enabled=True,
+    )
+    app = create_app(settings=advanced, now_provider=clock)
+    monkeypatch.setattr(
+        app.state.service,
+        "_blueprint_overrides",
+        lambda: BlueprintOverrides(
+            lie_attempts=(1, 2, 3),
+            lie_tile_counts=(1, 1, 1),
+            false_victory_enabled=False,
+            timer_attempts=(4,),
+            timer_durations=(10,),
+            blackout_roll=0.0,
+            blackout_attempt=3,
+            timer_enabled=True,
+            reverse_enabled=True,
+            blackout_enabled=True,
+        ),
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/games",
+            json={"mode": "practice", "presetKey": "deception@1"},
+        ).json()
+        game_id = started["gameId"]
+        client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "slate"}
+        )
+        client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "thgif"}
+        )
+        overlap = client.post(
+            f"/api/games/{game_id}/guesses", json={"guess": "ykcip"}
+        ).json()
+
+    assert overlap["attempt"] == 3
+    assert overlap["blackout"] == {"state": "activated"}
+    assert overlap["reverseEntry"] == {"state": "continued"}
+    assert overlap["timer"]["durationSeconds"] == 10
+    assert (
+        datetime.fromisoformat(overlap["timer"]["startsAt"])
+        - clock.current
+    ) == timedelta(seconds=2)
 
 
 def reverse_entry_settings(
@@ -135,11 +422,94 @@ def test_bootstrap_sets_device_cookie_and_returns_contract(
             "availability": "available",
             "resetAt": "2026-07-29T03:00:00Z",
         },
+        "presets": [
+            {
+                "presetKey": "doubt-1@1",
+                "name": "Doubt I",
+                "rank": 1,
+                "pressure": "Low",
+                "description": (
+                    "An approachable introduction to uncertain feedback."
+                ),
+                "available": True,
+            },
+            {
+                "presetKey": "doubt-2@1",
+                "name": "Doubt II",
+                "rank": 2,
+                "pressure": "Standard",
+                "description": "The complete standard Deception experience.",
+                "available": True,
+            },
+            {
+                "presetKey": "doubt-3@1",
+                "name": "Doubt III",
+                "rank": 3,
+                "pressure": "High",
+                "description": (
+                    "Aggressive pressure with repeated punishments."
+                ),
+                    "available": True,
+            },
+            {
+                "presetKey": "deception@1",
+                "name": "Deception",
+                "rank": 4,
+                "pressure": "Extreme",
+                "description": "An expert survival challenge.",
+                "available": True,
+            },
+        ],
     }
     cookie = response.cookies.get("deception_device")
     assert cookie
     assert "HttpOnly" in response.headers["set-cookie"]
     assert "SameSite=lax" in response.headers["set-cookie"]
+
+
+def test_practice_preset_is_selected_and_persisted(
+    client: TestClient, settings: Settings
+) -> None:
+    response = client.post(
+        "/api/games",
+        json={"mode": "practice", "presetKey": "doubt-1@1"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["preset"]["presetKey"] == "doubt-1@1"
+    with sqlite3.connect(settings.db_path) as connection:
+        preset_key, blueprint_json = connection.execute(
+            "SELECT preset_key, blueprint_json FROM games WHERE id = ?",
+            (payload["gameId"],),
+        ).fetchone()
+    assert preset_key == "doubt-1@1"
+    assert json.loads(blueprint_json)["preset_key"] == "doubt-1@1"
+
+
+def test_daily_defaults_to_doubt_two_and_unknown_presets_are_rejected(
+    client: TestClient,
+) -> None:
+    daily = client.post(
+        "/api/games",
+        json={"mode": "daily", "presetKey": "doubt-1@1"},
+    )
+    invalid = client.post(
+        "/api/games",
+        json={"mode": "practice", "presetKey": "unknown@1"},
+    )
+    assert daily.json()["preset"]["presetKey"] == "doubt-2@1"
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "INVALID_PRESET"
+
+
+def test_deception_is_selectable_in_practice(client: TestClient) -> None:
+    response = client.post(
+        "/api/games",
+        json={"mode": "practice", "presetKey": "deception@1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["preset"]["presetKey"] == "deception@1"
 
 
 def test_start_and_active_guess_do_not_reveal_answer(
@@ -404,13 +774,14 @@ def test_activated_lie_is_secret_until_terminal_and_then_auditable(
         "events": [
             {
                 "outcome": "activated",
+                "kind": "feedbackLie",
                 "scheduledAttempt": 1,
-                "change": {
+                "changes": [{
                     "tileIndex": 4,
                     "letter": "e",
                     "truthfulFeedback": "G",
                     "displayedFeedback": "Y",
-                },
+                }],
             }
         ],
     }
@@ -452,13 +823,14 @@ def test_constraint_backed_lie_activates_when_curated_decoys_are_exhausted(
     assert final["deception"]["events"] == [
         {
             "outcome": "activated",
+            "kind": "feedbackLie",
             "scheduledAttempt": 3,
-            "change": {
+            "changes": [{
                 "tileIndex": third["feedback"].index("Y"),
                 "letter": "picky"[third["feedback"].index("Y")],
                 "truthfulFeedback": "B",
                 "displayedFeedback": "Y",
-            },
+            }],
         }
     ]
 
@@ -500,23 +872,25 @@ def test_two_scheduled_rows_can_activate_without_reusing_a_tile(
         "events": [
             {
                 "outcome": "activated",
+                "kind": "feedbackLie",
                 "scheduledAttempt": 1,
-                "change": {
+                "changes": [{
                     "tileIndex": 4,
                     "letter": "e",
                     "truthfulFeedback": "G",
                     "displayedFeedback": "Y",
-                },
+                }],
             },
             {
                 "outcome": "activated",
+                "kind": "feedbackLie",
                 "scheduledAttempt": 2,
-                "change": {
+                "changes": [{
                     "tileIndex": 3,
                     "letter": "h",
                     "truthfulFeedback": "B",
                     "displayedFeedback": "Y",
-                },
+                }],
             },
         ]
     }
@@ -744,7 +1118,7 @@ def test_layer_one_database_migrates_without_injecting_midgame_lie(
         rules_version = connection.execute(
             "SELECT rules_version FROM games WHERE id = 'legacy-game'"
         ).fetchone()[0]
-        assert version == 5
+        assert version == 7
     assert rules_version == 1
 
 
