@@ -4,12 +4,16 @@ __pycache__/
 .pytest_cache/
 .pytest-tmp/
 .pytest-cache/
+coverage/
 backend/.pytest-run-*/
 .coverage
 htmlcov/
 .data/
 .tmp/
+tmp/
 .env
+.env.*
+!.env.example
 node_modules/
 frontend/dist/
 frontend/playwright-report/
@@ -17,6 +21,7 @@ frontend/test-results/
 output/
 .qa/
 .dev-server.log
+.vercel/
 *.sqlite
 *.sqlite3
 .gstack/
