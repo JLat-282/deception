@@ -178,7 +178,11 @@ class Settings:
             db_path=_resolve_project_path(
                 os.getenv("DECEPTION_DB_PATH", ".data/deception.sqlite")
             ),
-            database_url=os.getenv("DATABASE_URL") or None,
+            database_url=(
+                os.getenv("DATABASE_URL")
+                or os.getenv("POSTGRES_URL")
+                or None
+            ),
             daily_seed=os.getenv(
                 "DECEPTION_DAILY_SEED", "local-development-seed"
             ),

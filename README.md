@@ -22,8 +22,9 @@ The app supports:
 - Keyboard, mouse, and touch input with non-color-only feedback.
 
 Local development uses SQLite. Production uses managed Postgres when
-`DATABASE_URL` is configured, so game state survives serverless restarts and
-deployments. Clearing the browser cookie resets the anonymous player identity;
+`DATABASE_URL` or `POSTGRES_URL` is configured, so game state survives
+serverless restarts and deployments. `DATABASE_URL` takes precedence when both
+are present. Clearing the browser cookie resets the anonymous player identity;
 clearing the selected database resets stored games.
 
 ## Quick start
@@ -56,12 +57,13 @@ Import `JLat-282/deception` into Vercel and keep the project Root Directory at
 the repository root. The checked-in `vercel.json` builds `frontend/dist` and
 deploys `api/index.py` as the catch-all FastAPI function.
 
-Create a managed Postgres database through Vercel's Marketplace, Neon,
-Supabase, or another provider. Add these Production and Preview environment
-variables in Vercel:
+Connect a managed Postgres database through Vercel's Marketplace, Neon,
+Supabase, or another provider. The Vercel Supabase integration automatically
+adds `POSTGRES_URL`, which the backend accepts directly. If you connect a
+database manually, add `DATABASE_URL` instead. Also add these application
+variables to Production and Preview in Vercel:
 
 ```text
-DATABASE_URL=<transaction-pooler Postgres URL with SSL enabled>
 DECEPTION_DAILY_SEED=<a long random secret>
 DECEPTION_SECURE_COOKIE=true
 ```
@@ -72,11 +74,12 @@ The exact order and connection-string guidance are documented in
 [`supabase/README.md`](supabase/README.md). Production does not run schema DDL
 during a function cold start.
 
-The API and frontend share one Vercel domain. Do not create
-`VITE_API_BASE_URL` for this setup; leaving it unset makes the browser call the
-same-origin `/api` routes. This application does not use Supabase's browser SDK,
-so it does not need a Supabase URL, publishable key, anon key, or service-role
-key.
+After connecting the integration or changing environment variables, redeploy so
+the deployment receives them. The API and frontend share one Vercel domain. Do
+not create `VITE_API_BASE_URL` for this setup; leaving it unset makes the browser
+call the same-origin `/api` routes. This application does not use Supabase's
+browser SDK, so it does not need a Supabase URL, publishable key, anon key, or
+service-role key.
 
 ## Commands
 

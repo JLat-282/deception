@@ -15,8 +15,10 @@ The application accesses the tables only through FastAPI's trusted Postgres
 connection. Do not put a Supabase secret key or database password in frontend
 environment variables.
 
-For Vercel runtime traffic, copy the **Transaction pooler** connection string
-from Supabase's **Connect** dialog. It normally uses port `6543`. Replace the
-password placeholder, ensure SSL is enabled, and store the result as
-`DATABASE_URL` in Vercel. The direct connection is intended for migrations and
-administration, not the serverless runtime.
+For Vercel runtime traffic, connect the Supabase Marketplace integration to the
+Vercel project. It automatically supplies a pooled `POSTGRES_URL`, which this
+application accepts directly. If you configure the connection manually instead,
+store a pooled Postgres connection string with SSL enabled as `DATABASE_URL`.
+`DATABASE_URL` takes precedence if both variables exist. Direct database
+connections are intended for migrations and administration, not serverless
+runtime traffic.
