@@ -22,6 +22,8 @@ output/
 .qa/
 .dev-server.log
 .vercel/
+supabase/.branches/
+supabase/.temp/
 *.sqlite
 *.sqlite3
 .gstack/

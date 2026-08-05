@@ -34,6 +34,18 @@ CURRENT_RULES_VERSION = 8
 CURRENT_DECEPTION_STRATEGY_VERSION = 4
 
 
+def _stored_datetime(value: str | datetime | None) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value)
+
+
+def _stored_isoformat(value: str | datetime | None) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
 @dataclass(frozen=True)
 class StoredGame:
     game_id: str
@@ -600,7 +612,7 @@ class Repository:
             device_id=row["device_id"],
             puzzle_key=row["puzzle_key"],
             game_id=row["game_id"],
-            consumed_at=row["consumed_at"],
+            consumed_at=_stored_isoformat(row["consumed_at"]),
         )
 
     @staticmethod
@@ -1431,16 +1443,8 @@ class Repository:
             status=row["status"],
             scheduled_attempt=row["scheduled_attempt"],
             duration_seconds=row["duration_seconds"],
-            starts_at=(
-                datetime.fromisoformat(row["starts_at"])
-                if row["starts_at"]
-                else None
-            ),
-            deadline_at=(
-                datetime.fromisoformat(row["deadline_at"])
-                if row["deadline_at"]
-                else None
-            ),
+            starts_at=_stored_datetime(row["starts_at"]),
+            deadline_at=_stored_datetime(row["deadline_at"]),
             resolved_attempt=row["resolved_attempt"],
         )
 
@@ -1466,16 +1470,8 @@ class Repository:
                 status=row["status"],
                 scheduled_attempt=row["scheduled_attempt"],
                 duration_seconds=row["duration_seconds"],
-                starts_at=(
-                    datetime.fromisoformat(row["starts_at"])
-                    if row["starts_at"]
-                    else None
-                ),
-                deadline_at=(
-                    datetime.fromisoformat(row["deadline_at"])
-                    if row["deadline_at"]
-                    else None
-                ),
+                starts_at=_stored_datetime(row["starts_at"]),
+                deadline_at=_stored_datetime(row["deadline_at"]),
                 resolved_attempt=row["resolved_attempt"],
             )
             for row in rows

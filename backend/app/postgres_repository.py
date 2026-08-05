@@ -8,17 +8,7 @@ from psycopg import Error as PsycopgError
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
-from .repository import (
-    MIGRATION_1,
-    MIGRATION_2,
-    MIGRATION_3,
-    MIGRATION_4,
-    MIGRATION_5,
-    MIGRATION_7,
-    MIGRATION_9,
-    Repository,
-    SCHEMA,
-)
+from .repository import Repository
 
 
 POSTGRES_ERRORS = (PsycopgError, PoolTimeout)
@@ -86,7 +76,7 @@ class PostgresConnection:
 
 
 class PostgresRepository(Repository):
-    """Repository backend for managed Postgres in serverless production."""
+    """Managed Postgres backend; schema comes from Supabase migrations."""
 
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
@@ -104,7 +94,6 @@ class PostgresRepository(Repository):
             },
         )
         self._pool.open()
-        self.initialize()
 
     def connect(self) -> PostgresConnection:
         raw = self._pool.getconn()
@@ -125,39 +114,3 @@ class PostgresRepository(Repository):
             raise
         finally:
             connection.close()
-
-    def initialize(self) -> None:
-        postgres_schema = SCHEMA.replace(
-            "INTEGER PRIMARY KEY AUTOINCREMENT",
-            "BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
-        )
-        with self.connect() as connection:
-            connection.execute(
-                "SELECT pg_advisory_xact_lock(hashtext('deception-schema'))"
-            )
-            self._execute_script(connection, postgres_schema)
-            connection.execute(
-                "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
-                "rules_version INTEGER NOT NULL DEFAULT 1"
-            )
-            connection.execute(
-                "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
-                "preset_key TEXT NOT NULL DEFAULT 'doubt-2@1'"
-            )
-            connection.execute(
-                "ALTER TABLE games ADD COLUMN IF NOT EXISTS blueprint_json TEXT"
-            )
-            for migration in (
-                MIGRATION_1,
-                MIGRATION_2,
-                MIGRATION_3,
-                MIGRATION_4,
-                MIGRATION_5,
-                MIGRATION_7,
-                MIGRATION_9,
-            ):
-                self._execute_script(connection, migration)
-            connection.execute(
-                "ALTER TABLE daily_descent_puzzles ADD COLUMN IF NOT EXISTS "
-                "blueprint_json TEXT"
-            )

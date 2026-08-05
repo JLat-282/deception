@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 import sqlite3
 from threading import Event, Lock, get_ident
 
-from backend.app.repository import Repository
+from backend.app.repository import Repository, _stored_datetime, _stored_isoformat
+
+
+def test_postgres_timestamps_are_normalized() -> None:
+    timestamp = datetime(2026, 8, 5, 14, 30, tzinfo=UTC)
+
+    assert _stored_datetime(timestamp) == timestamp
+    assert _stored_datetime(timestamp.isoformat()) == timestamp
+    assert _stored_isoformat(timestamp) == timestamp.isoformat()
+    assert _stored_isoformat(None) is None
 
 
 def test_legacy_migration_is_serialized_across_initializers(

@@ -66,10 +66,17 @@ DECEPTION_DAILY_SEED=<a long random secret>
 DECEPTION_SECURE_COOKIE=true
 ```
 
+For Supabase, apply the three checked-in SQL files in
+[`supabase/migrations`](supabase/migrations) in filename order before deploying.
+The exact order and connection-string guidance are documented in
+[`supabase/README.md`](supabase/README.md). Production does not run schema DDL
+during a function cold start.
+
 The API and frontend share one Vercel domain. Do not create
 `VITE_API_BASE_URL` for this setup; leaving it unset makes the browser call the
-same-origin `/api` routes. The API creates its Postgres schema idempotently on
-startup.
+same-origin `/api` routes. This application does not use Supabase's browser SDK,
+so it does not need a Supabase URL, publishable key, anon key, or service-role
+key.
 
 ## Commands
 
