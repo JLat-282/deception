@@ -13,6 +13,7 @@ from .config import Settings
 from .deception import DeceptionEngine
 from .engine import TruthEngine, load_word_list
 from .errors import DomainError
+from .postgres_repository import POSTGRES_ERRORS, PostgresRepository
 from .repository import Repository
 from .schemas import (
     AttemptResponse,
@@ -43,7 +44,11 @@ def create_app(
     answers = load_word_list(active_settings.data_dir / "answers")
     engine = TruthEngine(words, answers)
     active_deception_engine = deception_engine or DeceptionEngine(engine)
-    repository = Repository(active_settings.db_path)
+    repository = (
+        PostgresRepository(active_settings.database_url)
+        if active_settings.database_url
+        else Repository(active_settings.db_path)
+    )
     resolved_now_provider = now_provider
     if resolved_now_provider is None and active_settings.fixed_now is not None:
         resolved_now_provider = lambda: active_settings.fixed_now
@@ -90,9 +95,8 @@ def create_app(
             content=payload.model_dump(by_alias=True),
         )
 
-    @app.exception_handler(sqlite3.Error)
     async def database_error_handler(
-        _request: Request, _error: sqlite3.Error
+        _request: Request, _error: Exception
     ) -> JSONResponse:
         payload = ErrorResponse(
             error=ErrorBody(
@@ -104,6 +108,10 @@ def create_app(
             status_code=503,
             content=payload.model_dump(by_alias=True),
         )
+
+    app.add_exception_handler(sqlite3.Error, database_error_handler)
+    for postgres_error in POSTGRES_ERRORS:
+        app.add_exception_handler(postgres_error, database_error_handler)
 
     def device_id_for(request: Request, response: Response) -> str:
         cookie_name = active_settings.cookie_name

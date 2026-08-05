@@ -21,8 +21,10 @@ The app supports:
 - A postgame audit of every activated or avoided opportunity.
 - Keyboard, mouse, and touch input with non-color-only feedback.
 
-This build runs on the developer machine only. Clearing the browser cookie or
-the local SQLite database resets the anonymous playtest identity.
+Local development uses SQLite. Production uses managed Postgres when
+`DATABASE_URL` is configured, so game state survives serverless restarts and
+deployments. Clearing the browser cookie resets the anonymous player identity;
+clearing the selected database resets stored games.
 
 ## Quick start
 
@@ -47,6 +49,27 @@ requests to FastAPI on port 8000, so the browser uses one local origin.
 Local defaults work without an `.env` file. Copy `.env.example` to `.env` only
 when you need to override local settings. Fixed answer, clock, lie-row, and
 session-seed values are deterministic test controls, not ordinary play options.
+
+## Deploy to Vercel
+
+Import `JLat-282/deception` into Vercel and keep the project Root Directory at
+the repository root. The checked-in `vercel.json` builds `frontend/dist` and
+deploys `api/index.py` as the catch-all FastAPI function.
+
+Create a managed Postgres database through Vercel's Marketplace, Neon,
+Supabase, or another provider. Add these Production and Preview environment
+variables in Vercel:
+
+```text
+DATABASE_URL=<transaction-pooler Postgres URL with SSL enabled>
+DECEPTION_DAILY_SEED=<a long random secret>
+DECEPTION_SECURE_COOKIE=true
+```
+
+The API and frontend share one Vercel domain. Do not create
+`VITE_API_BASE_URL` for this setup; leaving it unset makes the browser call the
+same-origin `/api` routes. The API creates its Postgres schema idempotently on
+startup.
 
 ## Commands
 
@@ -76,14 +99,14 @@ FastAPI publishes the local API schema at
 ```text
 React/Vite TypeScript
         |
-        | /api through Vite proxy
+        | /api through Vite proxy locally; same-origin on Vercel
         v
 FastAPI HTTP/API shell
         |
         +--> game service
         |       +--> pure truth engine
         |       +--> pure deception planner
-        +--> SQLite repository
+        +--> SQLite locally / managed Postgres in production
         +--> curated words and answers
 ```
 

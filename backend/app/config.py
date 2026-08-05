@@ -152,6 +152,7 @@ class Settings:
     db_path: Path
     daily_seed: str
     answer_list_version: str
+    database_url: str | None = None
     data_dir: Path = DEFAULT_DATA_DIR
     cookie_name: str = "deception_device"
     secure_cookie: bool = False
@@ -177,6 +178,7 @@ class Settings:
             db_path=_resolve_project_path(
                 os.getenv("DECEPTION_DB_PATH", ".data/deception.sqlite")
             ),
+            database_url=os.getenv("DATABASE_URL") or None,
             daily_seed=os.getenv(
                 "DECEPTION_DAILY_SEED", "local-development-seed"
             ),
