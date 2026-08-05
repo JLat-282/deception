@@ -1,8 +1,16 @@
 const ITEMS = [
   { marker: "✓", label: "Correct position", state: "g" },
-  { marker: "↔", label: "Present elsewhere", state: "y" },
+  { marker: null, label: "Present elsewhere", state: "y" },
   { marker: "×", label: "Absent", state: "b" },
 ];
+
+function ElsewhereIcon() {
+  return (
+    <svg className="legend-marker__icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m8 7-5 5 5 5M3 12h18M16 7l5 5-5 5" />
+    </svg>
+  );
+}
 
 export function FeedbackLegend() {
   return (
@@ -13,7 +21,7 @@ export function FeedbackLegend() {
             className={`legend-marker legend-marker--${item.state}`}
             aria-hidden="true"
           >
-            {item.marker}
+            {item.state === "y" ? <ElsewhereIcon /> : item.marker}
           </span>
           {item.label}
         </li>

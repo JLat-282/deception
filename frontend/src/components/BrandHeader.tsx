@@ -58,7 +58,12 @@ export function BrandHeader({
         <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20">
           <path d="M15 5 8 12l7 7" />
         </svg>
-        Return to modes
+        <span className="return-button__label return-button__label--full">
+          Return to modes
+        </span>
+        <span className="return-button__label return-button__label--compact">
+          Modes
+        </span>
       </button>
       <div className={`game-brand ${timer ? "game-brand--timer" : ""}`}>
         {timer ?? <h1 className="brand-title">DECEPTION</h1>}
