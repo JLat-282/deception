@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import os
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -16,6 +17,22 @@ load_dotenv(PROJECT_ROOT / ".env", override=False)
 def _resolve_project_path(raw_path: str) -> Path:
     path = Path(raw_path)
     return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _postgres_connection_url(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+    parsed = urlsplit(raw_value)
+    query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(
+                parsed.query, keep_blank_values=True
+            )
+            if key.lower() != "supa"
+        ]
+    )
+    return urlunsplit(parsed._replace(query=query))
 
 
 def _optional_utc_datetime(raw_value: str | None) -> datetime | None:
@@ -178,10 +195,9 @@ class Settings:
             db_path=_resolve_project_path(
                 os.getenv("DECEPTION_DB_PATH", ".data/deception.sqlite")
             ),
-            database_url=(
+            database_url=_postgres_connection_url(
                 os.getenv("DATABASE_URL")
                 or os.getenv("POSTGRES_URL")
-                or None
             ),
             daily_seed=os.getenv(
                 "DECEPTION_DAILY_SEED", "local-development-seed"

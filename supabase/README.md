@@ -17,8 +17,10 @@ environment variables.
 
 For Vercel runtime traffic, connect the Supabase Marketplace integration to the
 Vercel project. It automatically supplies a pooled `POSTGRES_URL`, which this
-application accepts directly. If you configure the connection manually instead,
-store a pooled Postgres connection string with SSL enabled as `DATABASE_URL`.
+application accepts directly. Provider-only `supa` metadata is removed before
+the URL is passed to PostgreSQL's driver. If you configure the connection
+manually instead, store a pooled Postgres connection string with SSL enabled as
+`DATABASE_URL`.
 `DATABASE_URL` takes precedence if both variables exist. Direct database
 connections are intended for migrations and administration, not serverless
 runtime traffic.
