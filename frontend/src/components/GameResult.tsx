@@ -63,17 +63,6 @@ export function GameResult({
     return `Row ${event.scheduledAttempt} was selected, but its feedback stayed truthful.`;
   };
 
-  const repeatedLieThreads = Array.from(
-    (deception?.events ?? []).reduce((counts, event) => {
-      if (event.outcome !== "activated") return counts;
-      for (const change of event.changes) {
-        const letter = change.letter.toUpperCase();
-        counts.set(letter, (counts.get(letter) ?? 0) + 1);
-      }
-      return counts;
-    }, new Map<string, number>()),
-  ).filter(([, count]) => count > 1);
-
   const canDescend =
     mode === "daily" && status === "won" && !!dailyStage && dailyStage < 4;
   const nextStageLabel =
@@ -102,11 +91,6 @@ export function GameResult({
         {deception ? (
           <section className="deception-result">
             <h3>What happened</h3>
-            {repeatedLieThreads.map(([letter, count]) => (
-              <p className="deception-thread" key={letter}>
-                The game lied about {letter} {count} times.
-              </p>
-            ))}
             <ol>
               {deception.events.map((event) => (
                 <li key={event.scheduledAttempt}>{deceptionSummary(event)}</li>

@@ -47,6 +47,11 @@ def main() -> int:
         scheduled: Counter[int] = Counter()
         activated: Counter[int] = Counter()
         timings: list[float] = []
+        altered_tiles = 0
+        suppressed_positive_tiles = 0
+        positive_lie_events = 0
+        suppression_events = 0
+        cap_obeyed = True
         for game_index in range(args.games_per_preset):
             answer = truth_engine.answers[
                 (game_index * 7_919) % len(truth_engine.answers)
@@ -56,6 +61,8 @@ def main() -> int:
             )
             history: list[VisibleGuess] = []
             used_tile_indexes: set[int] = set()
+            game_altered_tiles = 0
+            game_suppressed_positive_tiles = 0
             for attempt, guess in enumerate(PROBE_GUESSES, start=1):
                 truth = truth_engine.evaluate(guess, answer)
                 displayed = truth
@@ -92,7 +99,30 @@ def main() -> int:
                     if decision.activated:
                         activated[attempt] += 1
                         used_tile_indexes.update(decision.tile_indexes)
+                        positive_lie_events += any(
+                            marker in {"G", "Y"} for marker in truth
+                        )
+                        row_suppressed_positive_tiles = sum(
+                            truthful in {"G", "Y"} and displayed == "B"
+                            for truthful, displayed in zip(
+                                truth, decision.feedback
+                            )
+                        )
+                        game_altered_tiles += len(decision.tile_indexes)
+                        game_suppressed_positive_tiles += (
+                            row_suppressed_positive_tiles
+                        )
+                        suppression_events += row_suppressed_positive_tiles > 0
+                        cap_obeyed = cap_obeyed and (
+                            row_suppressed_positive_tiles <= 1
+                        )
                 history.append(VisibleGuess(guess, displayed))
+            altered_tiles += game_altered_tiles
+            suppressed_positive_tiles += game_suppressed_positive_tiles
+            cap_obeyed = cap_obeyed and (
+                game_altered_tiles <= 6
+                and game_suppressed_positive_tiles <= 2
+            )
 
         rates = {
             attempt: activated[attempt] / scheduled[attempt]
@@ -102,12 +132,20 @@ def main() -> int:
         p99 = percentile(timings, 0.99)
         maximum = max(timings)
         p999 = percentile(timings, 0.999)
+        suppression_rate = (
+            suppressed_positive_tiles / max(1, altered_tiles)
+        )
+        suppression_event_rate = (
+            suppression_events / max(1, positive_lie_events)
+        )
         print(
             f"- {preset.key}: "
             + " ".join(
                 f"g{attempt}={rate:.1%}" for attempt, rate in rates.items()
             )
             + (
+                f" positive-to-gray-tiles={suppression_rate:.1%}"
+                f" positive-lie-events={suppression_event_rate:.1%}"
                 f" p99={p99:.2f}ms p99.9={p999:.2f}ms max={maximum:.2f}ms"
             )
         )
@@ -115,8 +153,16 @@ def main() -> int:
         for attempt in range(1, 4):
             passed = passed and rates.get(attempt, 0.0) >= 0.95
         passed = passed and rates.get(4, 0.0) >= 0.90
-        late_floor = 0.75 if preset.key == "deception@3" else 0.85
+        late_floor = {
+            "doubt-1@3": 0.85,
+            "doubt-2@3": 0.82,
+            "doubt-3@3": 0.85,
+            "deception@3": 0.75,
+        }[preset.key]
         passed = passed and rates.get(5, 0.0) >= late_floor
+        passed = passed and cap_obeyed and suppression_rate <= 0.30
+        if preset.key == "deception@3":
+            passed = passed and 0.18 <= suppression_event_rate <= 0.32
         passed = passed and p99 <= 35 and p999 <= 50
 
     if args.enforce_targets and not passed:

@@ -5,14 +5,19 @@ from collections import Counter
 from statistics import median
 from time import perf_counter
 
-from backend.app.difficulty import build_blueprint, get_preset, public_presets
+from backend.app.difficulty import (
+    CURRENT_LIE_TILE_CAP,
+    build_blueprint,
+    get_preset,
+    public_presets,
+)
 
 
 LIE_TARGETS = {
     "doubt-1@3": {1: 0.85, 2: 0.15},
     "doubt-2@3": {1: 0.20, 2: 0.75, 3: 0.05},
     "doubt-3@3": {2: 0.25, 3: 0.70, 4: 0.05},
-    "deception@3": {3: 0.05, 4: 0.40, 5: 0.55},
+    "deception@3": {3: 0.20, 4: 0.75, 5: 0.05},
 }
 REVERSE_TARGETS = {
     "doubt-1@3": 0.15,
@@ -81,6 +86,8 @@ def validate_blueprint(preset_key: str, blueprint) -> None:
         raise AssertionError(f"{preset_key}: pressure budget exceeded")
     if len(plans) > preset.max_punishment_events:
         raise AssertionError(f"{preset_key}: event cap exceeded")
+    if sum(blueprint.lie_tile_counts) > CURRENT_LIE_TILE_CAP:
+        raise AssertionError(f"{preset_key}: lie tile cap exceeded")
     reverse_attempts = sorted(
         plan.effective_attempt for plan in plans if plan.kind == "reverseEntry"
     )

@@ -12,12 +12,18 @@ upgrade a run between stages.
 | `doubt-1@3` | 1: 85%, 2: 15% | 0% | 4% |
 | `doubt-2@3` | 1: 20%, 2: 75%, 3: 5% | 0% | 10% |
 | `doubt-3@3` | 2: 25%, 3: 70%, 4: 5% | 35% per row | 22% |
-| `deception@3` | 3: 5%, 4: 40%, 5: 55% | 65% per row | 35% |
+| `deception@3` | 3: 20%, 4: 75%, 5: 5% | 45% per row | 35% |
 
 Exact lie rows are uniformly selected without replacement from attempts one
 through six. There are no phase quotas, set row patterns, or adaptive
 rubber-banding. Winning guesses and attempt six stay truthful. A selected row
 can remain truthful when no candidate passes the contextual quality gate.
+Across every current game, no more than six displayed tiles may differ from
+their truthful feedback. A row may suppress at most one genuine green or yellow
+to gray, and the whole game may do so at most twice. When both a suppression and
+an information-preserving lie are plausible, the engine selects suppression 25%
+of the time; otherwise it uses the available valid style. Remaining lies invent
+plausible signals or confuse position.
 
 Generation 3 replaces exact-decoy-only plausibility with a player-belief model.
 A credible world is an alternate answer plus a difficulty-bounded explanation

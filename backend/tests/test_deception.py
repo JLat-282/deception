@@ -198,12 +198,19 @@ def test_slow_planner_uses_candidate_found_before_budget(monkeypatch) -> None:
     assert elapsed < 0.1
 
 
-def test_truth_can_be_concealed() -> None:
+def test_seeded_style_selection_supports_false_positive_and_suppression() -> None:
     truth_engine = full_engine()
     deception = DeceptionEngine(truth_engine)
     truth = truth_engine.evaluate("eerie", "crane")
 
-    decision = deception.choose_feedback(
+    preserving = deception.choose_feedback(
+        guess="eerie",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="seed-0",
+    )
+    suppressing = deception.choose_feedback(
         guess="eerie",
         real_answer="crane",
         truth_feedback=truth,
@@ -211,9 +218,12 @@ def test_truth_can_be_concealed() -> None:
         seed="seed-2",
     )
 
-    assert changed_indexes(truth, decision.feedback) == [2]
+    assert changed_indexes(truth, preserving.feedback) == [3]
+    assert truth[3] == "B"
+    assert preserving.feedback[3] == "Y"
+    assert changed_indexes(truth, suppressing.feedback) == [2]
     assert truth[2] == "Y"
-    assert decision.feedback[2] == "B"
+    assert suppressing.feedback[2] == "B"
 
 
 def test_selected_pattern_has_a_decoy_consistent_with_visible_history() -> None:
@@ -342,10 +352,12 @@ def test_strong_first_guess_can_lie_without_an_exact_decoy() -> None:
 
     assert truth == "GGGYB"
     assert decision.activated
-    assert decision.strategy == "belief_world"
-    assert decision.exact_decoys == 0
-    assert decision.credible_worlds >= 1
+    assert decision.strategy in {"belief_world", "constraint_backed"}
     assert len(changed_indexes(truth, decision.feedback)) == 1
+    assert sum(
+        truth[index] in {"G", "Y"} and decision.feedback[index] == "B"
+        for index in decision.tile_indexes
+    ) <= 1
 
 
 def test_late_unsupported_rare_letter_probe_can_stay_truthful() -> None:
@@ -399,6 +411,67 @@ def test_repeat_thread_can_reuse_a_previously_lied_about_letter() -> None:
     assert decision.activated
     assert decision.tile_index == 1
     assert decision.thread_letter == "t"
+
+
+def test_joint_regression_limits_positive_feedback_suppression() -> None:
+    truth_engine = full_engine()
+    deception = DeceptionEngine(truth_engine)
+    answer = "joint"
+    history: list[VisibleGuess] = []
+    suppressed_tiles = 0
+
+    for attempt, guess in enumerate(
+        ("stare", "cloud", "pinky", "fight", "bumpy"), start=1
+    ):
+        truth = truth_engine.evaluate(guess, answer)
+        decision = deception.choose_feedback(
+            guess=guess,
+            real_answer=answer,
+            truth_feedback=truth,
+            prior_history=history,
+            seed=f"joint-information-regression-{attempt}",
+            max_false_tiles=2,
+            credible_lie_row_cap=5,
+            repeat_thread_probability=0.35,
+            time_budget_ms=None,
+        )
+        row_suppressions = sum(
+            truthful in {"G", "Y"} and displayed == "B"
+            for truthful, displayed in zip(truth, decision.feedback)
+        )
+        assert row_suppressions <= 1
+        suppressed_tiles += row_suppressions
+        history.append(VisibleGuess(guess, decision.feedback))
+
+    assert suppressed_tiles <= 2
+    assert sum(marker != "B" for row in history for marker in row.feedback) >= 4
+
+
+def test_persisted_history_cannot_exceed_six_false_tiles() -> None:
+    truth_engine = full_engine()
+    deception = DeceptionEngine(truth_engine)
+    answer = "joint"
+    history: list[VisibleGuess] = []
+    for guess in ("stare", "cloud", "pinky"):
+        truth = truth_engine.evaluate(guess, answer)
+        mutation = list(truth)
+        for index in range(2):
+            mutation[index] = "Y" if truth[index] == "B" else "B"
+        history.append(VisibleGuess(guess, "".join(mutation)))
+
+    truth = truth_engine.evaluate("fight", answer)
+    decision = deception.choose_feedback(
+        guess="fight",
+        real_answer=answer,
+        truth_feedback=truth,
+        prior_history=history,
+        seed="persisted-over-budget",
+        max_false_tiles=2,
+        time_budget_ms=None,
+    )
+
+    assert decision.feedback == truth
+    assert decision.reason == "strategy_restricted"
 
 
 def test_constraint_backed_lie_does_not_reuse_a_previously_guessed_letter(

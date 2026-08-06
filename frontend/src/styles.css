@@ -1485,12 +1485,6 @@ button:disabled {
   font-size: 1.45rem;
 }
 
-.deception-result .deception-thread {
-  margin: 0.7rem 0 0;
-  color: var(--text);
-  font-weight: 650;
-}
-
 .deception-result ol {
   margin: 0.75rem 0 0;
   padding-left: 1.35rem;

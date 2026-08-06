@@ -10,6 +10,7 @@ from typing import Literal, Mapping
 
 
 DEFAULT_PRESET_KEY = "doubt-2@3"
+CURRENT_LIE_TILE_CAP = 6
 
 
 @dataclass(frozen=True)
@@ -280,9 +281,9 @@ V3_PRESETS = {
     "deception@3": _v3(
         "deception@2",
         lie_policy=LiePolicy(
-            count_weights=((3, 0.05), (4, 0.40), (5, 0.55)),
+            count_weights=((3, 0.20), (4, 0.75), (5, 0.05)),
             max_false_tiles=2,
-            two_tile_probability=0.65,
+            two_tile_probability=0.45,
             credible_lie_row_cap=5,
             repeat_thread_probability=0.35,
         ),
@@ -980,6 +981,33 @@ def build_blueprint(
         else 1
         for attempt in lie_attempts
     )
+    if (
+        preset_key.endswith("@3")
+        and overrides.lie_tile_counts is not None
+        and sum(lie_tile_counts) > CURRENT_LIE_TILE_CAP
+    ):
+        raise ValueError(
+            f"Current presets permit at most {CURRENT_LIE_TILE_CAP} false tiles."
+        )
+    if preset_key.endswith("@3") and sum(lie_tile_counts) > CURRENT_LIE_TILE_CAP:
+        available_two_tile_slots = max(
+            0, CURRENT_LIE_TILE_CAP - len(lie_attempts)
+        )
+        retained_two_tile_attempts = set(
+            _ranked_attempts(
+                seed,
+                "blueprint:v3:lie-tile-cap",
+                tuple(
+                    attempt
+                    for attempt, count in zip(lie_attempts, lie_tile_counts)
+                    if count == 2
+                ),
+            )[:available_two_tile_slots]
+        )
+        lie_tile_counts = tuple(
+            2 if attempt in retained_two_tile_attempts else 1
+            for attempt in lie_attempts
+        )
     if len(lie_tile_counts) != len(lie_attempts) or any(
         count not in range(1, preset.max_false_tiles + 1)
         for count in lie_tile_counts

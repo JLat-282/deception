@@ -167,4 +167,37 @@ describe("GameResult", () => {
       screen.getByText("Row 2 was the answer, but Deception rejected it."),
     ).toBeInTheDocument();
   });
+
+  it("does not expose repeated-letter targeting in the result audit", () => {
+    render(
+      <GameResult
+        mode="practice"
+        status="lost"
+        answer="joint"
+        attempt={6}
+        deception={{
+          events: [1, 2].map((scheduledAttempt) => ({
+            outcome: "activated" as const,
+            kind: "feedbackLie" as const,
+            scheduledAttempt,
+            changes: [
+              {
+                tileIndex: 0,
+                letter: "t",
+                truthfulFeedback: "Y" as const,
+                displayedFeedback: "B" as const,
+              },
+            ],
+          })),
+        }}
+        onClose={vi.fn()}
+        onInfinite={vi.fn()}
+        onDescend={vi.fn()}
+        onModes={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/lied about T 2 times/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Row [12] lied on one tile/)).toHaveLength(2);
+  });
 });

@@ -8,6 +8,7 @@ import pytest
 
 from backend.app.difficulty import (
     BlueprintOverrides,
+    CURRENT_LIE_TILE_CAP,
     GameBlueprint,
     build_blueprint,
     public_presets,
@@ -28,7 +29,7 @@ def test_preset_registry_exposes_all_four_versioned_levels() -> None:
         ((1, 0.85), (2, 0.15)),
         ((1, 0.20), (2, 0.75), (3, 0.05)),
         ((2, 0.25), (3, 0.70), (4, 0.05)),
-        ((3, 0.05), (4, 0.40), (5, 0.55)),
+        ((3, 0.20), (4, 0.75), (5, 0.05)),
     ]
     assert presets[2].timer_count_weights == (
         (0, 0.05), (1, 0.50), (2, 0.45)
@@ -72,7 +73,7 @@ def test_preset_registry_exposes_all_four_versioned_levels() -> None:
     ]
     assert [preset.pressure_budget for preset in presets] == [2, 6, 12, 20]
     assert [preset.max_punishment_events for preset in presets] == [1, 3, 7, 11]
-    assert presets[3].two_tile_probability == 0.65
+    assert presets[3].two_tile_probability == 0.45
     assert presets[3].false_victory_probability == 0.05
     assert presets[3].max_reverse_events == 3
     assert presets[3].combination_policy == "broad"
@@ -299,7 +300,7 @@ def test_v3_lie_count_distributions_match_approved_weights() -> None:
         "doubt-1@3": {1: 0.85, 2: 0.15},
         "doubt-2@3": {1: 0.20, 2: 0.75, 3: 0.05},
         "doubt-3@3": {2: 0.25, 3: 0.70, 4: 0.05},
-        "deception@3": {3: 0.05, 4: 0.40, 5: 0.55},
+        "deception@3": {3: 0.20, 4: 0.75, 5: 0.05},
     }
     for preset_key, expected in targets.items():
         counts = Counter(
@@ -308,6 +309,25 @@ def test_v3_lie_count_distributions_match_approved_weights() -> None:
         )
         for lie_count, target in expected.items():
             assert abs(counts[lie_count] / 10_000 - target) <= 0.02
+
+
+def test_current_blueprints_cap_total_false_tiles_at_six() -> None:
+    for preset_key in (
+        "doubt-1@3", "doubt-2@3", "doubt-3@3", "deception@3"
+    ):
+        for index in range(2_000):
+            blueprint = build_blueprint(preset_key, f"tile-cap-{index}")
+            assert sum(blueprint.lie_tile_counts) <= CURRENT_LIE_TILE_CAP
+
+    with pytest.raises(ValueError, match="at most 6 false tiles"):
+        build_blueprint(
+            "deception@3",
+            "invalid-tile-cap",
+            BlueprintOverrides(
+                lie_attempts=(1, 2, 3, 4),
+                lie_tile_counts=(2, 2, 2, 2),
+            ),
+        )
 
 
 def test_v3_blueprints_obey_pressure_and_combination_rules() -> None:

@@ -82,6 +82,7 @@ def benchmark_scenario(
     )
     truth_feedback = truth_engine.evaluate(scenario.guess, answer)
     timings: list[float] = []
+    two_tile_activations = 0
 
     for sample in range(samples):
         started_at = perf_counter()
@@ -98,13 +99,12 @@ def benchmark_scenario(
             raise RuntimeError(
                 f"{scenario.name} did not activate its expected lie"
             )
-        if (
-            scenario.max_false_tiles == 2
-            and len(decision.tile_indexes) != 2
-        ):
-            raise RuntimeError(
-                f"{scenario.name} did not produce its expected two-tile lie"
-            )
+        two_tile_activations += len(decision.tile_indexes) == 2
+
+    if scenario.max_false_tiles == 2 and two_tile_activations == 0:
+        raise RuntimeError(
+            f"{scenario.name} never exercised a two-tile decision"
+        )
 
     return {
         "p50": median(timings),

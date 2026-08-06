@@ -160,13 +160,17 @@ puzzles pin their preset set for the full daily run.
 | Doubt I | 1: 85%, 2: 15% | 0% |
 | Doubt II | 1: 20%, 2: 75%, 3: 5% | 0% |
 | Doubt III | 2: 25%, 3: 70%, 4: 5% | 35% |
-| Deception | 3: 5%, 4: 40%, 5: 55% | 65% |
+| Deception | 3: 20%, 4: 75%, 5: 5% | 45% |
 
 The exact rows are selected uniformly without replacement. There are no phase
 patterns or guaranteed early/middle/late quotas. Winning guesses and guess six
 remain truthful. A scheduled row may also stay truthful when no credible lie
 survives the quality and deadline gates. Repeat lie threads are possible at
 every difficulty but become more likely as difficulty rises.
+Current blueprints cap altered feedback at six tiles for the full game. The
+planner prefers position confusion and plausible false positives; changing a
+real green or yellow to gray is selected 25% of the time when both lie styles
+are plausible, and remains limited to one tile per row and two per game.
 
 Doubt I permits at most one punishment. Doubt II allows light overlap. Doubt
 III and Deception coordinate high-pressure scenes while keeping the exact

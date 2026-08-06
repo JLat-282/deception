@@ -85,6 +85,9 @@ class _Candidate:
 _MARKER_RANK: dict[str, int] = {"B": 0, "Y": 1, "G": 2}
 DEFAULT_DECISION_BUDGET_MS = 40
 _PATTERN_CACHE_LIMIT = 64
+MAX_POSITIVE_SUPPRESSIONS_PER_GAME = 2
+MAX_FALSE_TILES_PER_GAME = 6
+POSITIVE_SUPPRESSION_PROBABILITY = 0.25
 
 
 class DeceptionEngine:
@@ -226,6 +229,31 @@ class DeceptionEngine:
             )
         return tuple(lies)
 
+    def _historical_positive_suppressions(
+        self,
+        prior_history: tuple[VisibleGuess, ...],
+        real_answer: str,
+    ) -> int:
+        return sum(
+            truthful in {"G", "Y"} and displayed == "B"
+            for row in prior_history
+            for truthful, displayed in zip(
+                self.truth_engine.evaluate(row.guess, real_answer),
+                row.feedback,
+            )
+        )
+
+    @staticmethod
+    def _positive_suppressions(
+        truth_feedback: str,
+        mutation: str,
+        tile_indexes: tuple[int, ...],
+    ) -> int:
+        return sum(
+            truth_feedback[index] in {"G", "Y"} and mutation[index] == "B"
+            for index in tile_indexes
+        )
+
     def _score_candidate(
         self,
         *,
@@ -257,12 +285,16 @@ class DeceptionEngine:
             truthful = truth_feedback[index]
             displayed = mutation[index]
             letter = guess[index]
-            if truthful == "G":
-                score += 1.35
+            if displayed == "B" and truthful == "G":
+                score += 0.55
+            elif displayed == "B" and truthful == "Y":
+                score += 0.75
+            elif truthful == "G":
+                score += 0.85
             elif truthful == "Y":
-                score += 0.95
+                score += 0.90
             else:
-                score += 0.75 if displayed == "Y" else 1.0
+                score += 1.15 if displayed == "Y" else 0.70
 
             repeated_claims = [
                 marker
@@ -434,7 +466,52 @@ class DeceptionEngine:
         historical_lies = self._historical_lies(
             prior_history, real_answer
         )
-        for (mutation, tile_indexes), values in aggregates.items():
+        historical_suppressions = self._historical_positive_suppressions(
+            prior_history, real_answer
+        )
+        aggregate_items = [
+            ((mutation, tile_indexes), values)
+            for (mutation, tile_indexes), values in aggregates.items()
+            if self._positive_suppressions(
+                truth_feedback, mutation, tile_indexes
+            )
+            <= 1
+            and historical_suppressions
+            + self._positive_suppressions(
+                truth_feedback, mutation, tile_indexes
+            )
+            <= MAX_POSITIVE_SUPPRESSIONS_PER_GAME
+        ]
+        preserving_items = [
+            item
+            for item in aggregate_items
+            if self._positive_suppressions(
+                truth_feedback, item[0][0], item[0][1]
+            )
+            == 0
+        ]
+        suppressing_items = [
+            item
+            for item in aggregate_items
+            if self._positive_suppressions(
+                truth_feedback, item[0][0], item[0][1]
+            )
+            == 1
+        ]
+        suppression_roll = (
+            self._seeded_number(seed, "positive-suppression:v4") / 2**64
+        )
+        if preserving_items and suppressing_items:
+            aggregate_items = (
+                suppressing_items
+                if suppression_roll < POSITIVE_SUPPRESSION_PROBABILITY
+                else preserving_items
+            )
+        elif preserving_items:
+            aggregate_items = preserving_items
+        else:
+            aggregate_items = suppressing_items
+        for (mutation, tile_indexes), values in aggregate_items:
             credible_worlds = int(values[0])
             credible_weight = float(values[1])
             exact_decoys = int(values[2])
@@ -443,6 +520,15 @@ class DeceptionEngine:
                 - _MARKER_RANK[truth_feedback[index]]
                 for index in tile_indexes
             )
+            positive_suppressions = self._positive_suppressions(
+                truth_feedback, mutation, tile_indexes
+            )
+            if (
+                positive_suppressions > 1
+                or historical_suppressions + positive_suppressions
+                > MAX_POSITIVE_SUPPRESSIONS_PER_GAME
+            ):
+                continue
             score, thread_letter = self._score_candidate(
                 guess=guess,
                 truth_feedback=truth_feedback,
@@ -536,12 +622,21 @@ class DeceptionEngine:
         time_budget_ms: int | None = DEFAULT_DECISION_BUDGET_MS,
     ) -> DeceptionDecision:
         started_at = perf_counter()
-        # Reserve a small portion of the caller's wall-clock budget for ranking
-        # and response construction after the answer scan stops.
+        # Reserve enough of the caller's wall-clock budget for candidate style
+        # selection, ranking, and response construction after the answer scan.
+        # The planner keeps the best plausible candidate found before this
+        # deadline, so a broader candidate mix cannot delay the visible flip.
+        reserve_ms = (
+            min(12.0, time_budget_ms * 0.30)
+            if time_budget_ms is not None and belief_aware
+            else min(8.0, time_budget_ms * 0.20)
+            if time_budget_ms is not None
+            else 0.0
+        )
         search_budget_ms = (
             None
             if time_budget_ms is None
-            else max(0.0, time_budget_ms - min(8.0, time_budget_ms * 0.20))
+            else max(0.0, time_budget_ms - reserve_ms)
         )
         deadline = (
             None
@@ -557,6 +652,24 @@ class DeceptionEngine:
             )
 
         visible_history = tuple(prior_history)
+        if belief_aware:
+            historical_false_tiles = sum(
+                self._distance(
+                    self.truth_engine.evaluate(row.guess, real_answer),
+                    row.feedback,
+                )
+                for row in visible_history
+            )
+            remaining_false_tiles = (
+                MAX_FALSE_TILES_PER_GAME - historical_false_tiles
+            )
+            if remaining_false_tiles <= 0:
+                return self._decision(
+                    started_at=started_at,
+                    feedback=truth_feedback,
+                    reason="strategy_restricted",
+                )
+            max_false_tiles = min(max_false_tiles, remaining_false_tiles)
         if belief_aware:
             fallback_decision = (
                 self._constraint_backed_feedback(
