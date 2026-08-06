@@ -169,8 +169,6 @@ export function GameBoard({
                   >
                     {timedOut && column.index === 0 ? (
                       <span className="timeout-row-label">Time expired</span>
-                    ) : invalidCommitment && column.index === 0 ? (
-                      <span className="timeout-row-label">Guess rejected</span>
                     ) : isReversingRow ? (
                       <>
                         <span className="tile-letter tile-letter--reverse-from">

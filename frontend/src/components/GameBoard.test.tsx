@@ -96,6 +96,35 @@ describe("GameBoard", () => {
     expect(screen.getAllByRole("cell")).toHaveLength(30);
   });
 
+  it("renders every attempted letter uniformly after Forced Commitment rejects a guess", () => {
+    render(
+      <GameBoard
+        wordLength={5}
+        maxGuesses={6}
+        currentGuess=""
+        guesses={[
+          {
+            consumed: true,
+            reason: "invalidCommitment",
+            attemptedGuess: "cranz",
+            attempt: 1,
+            status: "playing",
+          },
+        ]}
+        revealing={false}
+      />,
+    );
+
+    const rejectedRow = screen.getAllByRole("row")[0];
+    expect(rejectedRow.querySelectorAll(".tile-letter")).toHaveLength(5);
+    expect(
+      screen.getByRole("cell", {
+        name: "Row 1, guess rejected and consumed",
+      }),
+    ).toHaveTextContent("C");
+    expect(screen.queryByText("Guess rejected")).not.toBeInTheDocument();
+  });
+
   it("keeps guessed letters while erasing feedback through a Blackout row", () => {
     const { container } = render(
       <GameBoard
