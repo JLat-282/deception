@@ -152,6 +152,52 @@ class ActivatedIntrusion(APIModel):
     placement: Literal["upperLeft", "upperRight", "lowerLeft", "lowerRight"]
 
 
+class PunishmentUpdate(APIModel):
+    kind: Literal[
+        "timer",
+        "reverseEntry",
+        "blackout",
+        "intrusion",
+        "blindEntry",
+        "corruptedHistory",
+        "noRevision",
+        "forcedCommitment",
+        "memoryTax",
+    ]
+    state: Literal["activated", "resolved", "continued", "expired"]
+    effective_attempt: int = Field(ge=1, le=6)
+    duration_seconds: Literal[10, 30] | None = None
+    starts_at: datetime | None = None
+    deadline_at: datetime | None = None
+    row_attempt: int | None = Field(default=None, ge=1, le=6)
+    retain_rows: int | None = Field(default=None, ge=1, le=5)
+    placement: Literal[
+        "upperLeft", "upperRight", "lowerLeft", "lowerRight"
+    ] | None = None
+
+
+class PunishmentReportEvent(APIModel):
+    kind: Literal[
+        "timer",
+        "reverseEntry",
+        "blackout",
+        "intrusion",
+        "blindEntry",
+        "corruptedHistory",
+        "noRevision",
+        "forcedCommitment",
+        "memoryTax",
+    ]
+    ordinal: int = Field(ge=1)
+    trigger_attempt: int = Field(ge=1, le=6)
+    effective_attempt: int = Field(ge=1, le=6)
+    outcome: Literal["activated", "missed", "superseded", "notReached"]
+
+
+class PunishmentReport(APIModel):
+    events: list[PunishmentReportEvent]
+
+
 class GuessResponse(APIModel):
     guess: str
     feedback: str
@@ -163,6 +209,8 @@ class GuessResponse(APIModel):
     timer: ActivatedGuessTimer | CompletedGuessTimer | None = None
     blackout: ActivatedBlackout | None = None
     intrusion: ActivatedIntrusion | None = None
+    punishments: list[PunishmentUpdate] | None = None
+    punishment_report: PunishmentReport | None = None
 
 
 class TimedOutResponse(APIModel):
@@ -171,11 +219,28 @@ class TimedOutResponse(APIModel):
     status: GameStatus
     answer: str | None = None
     deception: DeceptionReveal | None = None
+    reverse_entry: ReverseEntryUpdate | None = None
     timer: ExpiredGuessTimer
     next_timer: ActivatedGuessTimer | None = None
+    punishments: list[PunishmentUpdate] | None = None
+    punishment_report: PunishmentReport | None = None
 
 
-AttemptResponse = GuessResponse | TimedOutResponse
+class InvalidCommitmentResponse(APIModel):
+    consumed: Literal[True] = True
+    reason: Literal["invalidCommitment"] = "invalidCommitment"
+    attempted_guess: str
+    attempt: int
+    status: GameStatus
+    answer: str | None = None
+    deception: DeceptionReveal | None = None
+    reverse_entry: ReverseEntryUpdate | None = None
+    next_timer: ActivatedGuessTimer | None = None
+    punishments: list[PunishmentUpdate] | None = None
+    punishment_report: PunishmentReport | None = None
+
+
+AttemptResponse = GuessResponse | TimedOutResponse | InvalidCommitmentResponse
 
 
 class HealthResponse(APIModel):

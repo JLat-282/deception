@@ -30,8 +30,8 @@ StoredDeceptionReason = Literal[
     "final_guess",
     "legacy_unknown",
 ]
-CURRENT_RULES_VERSION = 8
-CURRENT_DECEPTION_STRATEGY_VERSION = 4
+CURRENT_RULES_VERSION = 9
+CURRENT_DECEPTION_STRATEGY_VERSION = 5
 
 
 def _stored_datetime(value: str | datetime | None) -> datetime | None:
@@ -102,6 +102,7 @@ class StoredGuess:
     truth_feedback: str
     display_feedback: str
     deception_reason: StoredDeceptionReason
+    deception_diagnostics_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,7 @@ CREATE TABLE IF NOT EXISTS guesses (
     truth_feedback TEXT NOT NULL,
     display_feedback TEXT NOT NULL,
     deception_reason TEXT NOT NULL DEFAULT 'legacy_unknown',
+    deception_diagnostics_json TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (game_id, attempt)
 );
@@ -567,6 +569,19 @@ class Repository:
                         "ADD COLUMN blueprint_json TEXT"
                     )
                 connection.execute("PRAGMA user_version = 10")
+            if version < 11:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(guesses)"
+                    ).fetchall()
+                }
+                if "deception_diagnostics_json" not in columns:
+                    connection.execute(
+                        "ALTER TABLE guesses "
+                        "ADD COLUMN deception_diagnostics_json TEXT"
+                    )
+                connection.execute("PRAGMA user_version = 11")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -1104,6 +1119,7 @@ class Repository:
         created_at: datetime,
         daily_puzzle_key: str | None = None,
         game_id: str | None = None,
+        strategy_version: int = CURRENT_DECEPTION_STRATEGY_VERSION,
     ) -> list[DeceptionSchedule]:
         if (daily_puzzle_key is None) == (game_id is None):
             raise ValueError("Provide exactly one deception schedule scope.")
@@ -1142,7 +1158,7 @@ class Repository:
                     ordinal,
                     scheduled_attempt,
                     seed,
-                    CURRENT_DECEPTION_STRATEGY_VERSION,
+                    strategy_version,
                     created_at.isoformat(),
                 ),
             )
@@ -1200,7 +1216,7 @@ class Repository:
         rows = connection.execute(
             """
             SELECT attempt, guess, truth_feedback, display_feedback,
-                   deception_reason
+                   deception_reason, deception_diagnostics_json
             FROM guesses
             WHERE game_id = ?
             ORDER BY attempt
@@ -1214,6 +1230,7 @@ class Repository:
                 truth_feedback=row["truth_feedback"],
                 display_feedback=row["display_feedback"],
                 deception_reason=row["deception_reason"],
+                deception_diagnostics_json=row["deception_diagnostics_json"],
             )
             for row in rows
         ]
@@ -1325,13 +1342,12 @@ class Repository:
             SET status = ?,
                 trigger_attempt = CASE WHEN ? THEN NULL ELSE trigger_attempt END,
                 trigger_reason = CASE WHEN ? THEN NULL ELSE trigger_reason END,
-                consumed_attempt = CASE WHEN ? THEN NULL ELSE ? END,
+                consumed_attempt = ?,
                 updated_at = ?
             WHERE game_id = ? AND status = 'active'
             """,
             (
                 "armed" if rearm else "consumed",
-                rearm,
                 rearm,
                 rearm,
                 consumed_attempt,
@@ -1738,6 +1754,7 @@ class Repository:
         truth_feedback: str,
         display_feedback: str,
         deception_reason: StoredDeceptionReason,
+        deception_diagnostics_json: str | None,
         status: GameStatus,
         created_at: datetime,
     ) -> None:
@@ -1746,8 +1763,9 @@ class Repository:
             """
             INSERT INTO guesses(
                 game_id, attempt, guess, truth_feedback,
-                display_feedback, deception_reason, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                display_feedback, deception_reason,
+                deception_diagnostics_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game_id,
@@ -1756,6 +1774,7 @@ class Repository:
                 truth_feedback,
                 display_feedback,
                 deception_reason,
+                deception_diagnostics_json,
                 timestamp,
             ),
         )

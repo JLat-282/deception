@@ -19,8 +19,8 @@ export function HowDeceptionWorks({
 }: HowDeceptionWorksProps) {
   return (
     <Dialog
-      title="Deception Guide"
-      closeLabel="Close Deception Guide"
+      title="How Deception Works"
+      closeLabel="Close How Deception Works"
       className="help-dialog"
       onClose={onClose}
     >
@@ -32,46 +32,83 @@ export function HowDeceptionWorks({
           </summary>
           <div className="help-sections">
             <section>
-              <h3>The rule</h3>
-              <p>
-                Rows are selected in secret. Depending on the difficulty, one or
-                two tiles in a selected row may show the wrong color. Feedback
-                may lie more than once.
-              </p>
+              <h3>What the colors mean</h3>
+              <ul className="guide-points">
+                <li>
+                  <strong>Red:</strong> The letter is in the correct spot.
+                </li>
+                <li>
+                  <strong>Purple:</strong> The letter is in the word but belongs
+                  somewhere else.
+                </li>
+                <li>
+                  <strong>Grey:</strong> The letter is not in the word.
+                </li>
+              </ul>
             </section>
             <section>
-              <h3>What can lie</h3>
-              <p>
-                Only feedback can lie. Letters never change or move. A lie can
-                hide a real clue or create a convincing false one. On Deception,
-                a rare early correct answer can also be rejected, but the answer
-                cannot be rejected twice and later submissions of that answer
-                are protected.
-              </p>
+              <h3>The lie</h3>
+              <ul className="guide-points">
+                <li>
+                  Some guesses may show the wrong color on one or two tiles.
+                  This can happen more than once.
+                </li>
+                <li>The letters you enter never change or move.</li>
+                <li>
+                  Example: A tile that should be red might appear purple or
+                  grey.
+                </li>
+                <li>
+                  On Deception difficulty, an early correct answer may be marked
+                  wrong once. Entering the answer again will win.
+                </li>
+              </ul>
             </section>
             <section>
-              <h3>Modes</h3>
-              <p>
-                Daily Descent is a four-stage run from Doubt I through
-                Deception. Clear a stage to descend; one loss ends the run.
-                Infinite starts a fresh word every game and lets you choose any
-                difficulty.
-              </p>
+              <h3>Game modes</h3>
+              <ul className="guide-points">
+                <li>
+                  <strong>Daily Descent:</strong> Solve four words as the
+                  difficulty increases. One loss ends the run.
+                </li>
+                <li>
+                  <strong>Infinite:</strong> Start a new game whenever you want
+                  and choose the difficulty.
+                </li>
+              </ul>
             </section>
             <section>
-              <h3>Difficulties</h3>
-              <p>
-                Doubt I introduces uncertain feedback. Doubt II adds the full
-                standard pressure. Doubt III allows repeated and overlapping
-                threats. Deception combines the strongest lies and punishments.
-              </p>
+              <h3>Difficulty levels</h3>
+              <ul className="guide-points">
+                <li>
+                  <strong>Doubt I:</strong> One guess may lie, changing one tile
+                  color. Punishments are lighter.
+                </li>
+                <li>
+                  <strong>Doubt II:</strong> One or two guesses may lie,
+                  changing one tile color each. More punishments are possible.
+                </li>
+                <li>
+                  <strong>Doubt III:</strong> Two or three guesses may lie. A
+                  lie can change two tile colors, and punishments can repeat or
+                  happen together.
+                </li>
+                <li>
+                  <strong>Deception:</strong> Three to five guesses may lie. It
+                  has the most punishments, and an early correct answer may be
+                  marked wrong once.
+                </li>
+              </ul>
             </section>
             <section>
               <h3>After the game</h3>
-              <p>
-                Every selected row is revealed after the game, including rows
-                that stayed truthful or were never reached.
-              </p>
+              <ul className="guide-points">
+                <li>
+                  The results reveal every guess chosen for a possible lie. They
+                  show which colors changed, which guesses stayed truthful, and
+                  which guesses you never reached.
+                </li>
+              </ul>
             </section>
           </div>
         </details>
@@ -84,24 +121,57 @@ export function HowDeceptionWorks({
           <ul className="punishment-list">
             <li>
               <strong>Reverse Entry</strong>
-              <span>Type your next guess backwards.</span>
+              <span>
+                Type your next word backward. Example: CRANE becomes ENARC.
+              </span>
             </li>
             <li>
               <strong>Guess Timer</strong>
-              <span>Submit your next guess before time runs out.</span>
+              <span>
+                You have either 30 or 10 seconds to submit your next guess. If
+                time runs out, the game skips that guess.
+              </span>
             </li>
             <li>
               <strong>Blackout</strong>
               <span>
-                Earlier feedback disappears, and the keyboard starts over.
+                The colors on your previous guesses are erased, and the keyboard
+                colors reset.
               </span>
             </li>
             <li>
               <strong>Intrusion</strong>
               <span>
-                The screen is blocked until you catch and dismiss the
-                interruption.
+                The game is blocked until you click the moving Dismiss button.
+                Timers and other punishments may continue in the background.
               </span>
+            </li>
+            <li>
+              <strong>Blind Entry</strong>
+              <span>Your letters stay hidden until you submit the guess.</span>
+            </li>
+            <li>
+              <strong>Corrupted History</strong>
+              <span>
+                One previous guess is hidden until you submit your next guess.
+              </span>
+            </li>
+            <li>
+              <strong>Forced Commitment</strong>
+              <span>
+                Typing the fifth letter submits the word immediately. An invalid
+                word still uses a guess.
+              </span>
+            </li>
+            <li>
+              <strong>No Revision</strong>
+              <span>
+                After typing your first letter, you cannot use Backspace.
+              </span>
+            </li>
+            <li>
+              <strong>Memory Tax</strong>
+              <span>Only your two most recent guesses stay visible.</span>
             </li>
           </ul>
         </details>

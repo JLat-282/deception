@@ -5,9 +5,10 @@ Apply the SQL files in `migrations/` in filename order:
 1. `20260805144122_core_game_schema.sql`
 2. `20260805144132_deception_mechanics.sql`
 3. `20260805144143_daily_descent.sql`
+4. `20260806113000_deception_diagnostics.sql`
 
 For a new hosted Supabase project, open **SQL Editor**, paste the complete
-contents of the first file, and run it. Repeat for the second and third files.
+contents of the first file, and run it. Repeat for each remaining file.
 Stop if any file reports an error; do not continue to the next migration.
 
 The migrations enable Row Level Security and grant no browser-facing policies.

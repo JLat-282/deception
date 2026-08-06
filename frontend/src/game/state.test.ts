@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BootstrapResponse, StartGameResponse } from "../api/types";
-import { isTimedOut } from "../api/types";
+import { isInvalidCommitment, isTimedOut } from "../api/types";
 import { initialState, reducer } from "./state";
 
 const bootstrap: BootstrapResponse = {
@@ -50,6 +50,24 @@ describe("app state machine", () => {
     expect(starting.phase).toBe("starting");
     expect(ready.phase).toBe("ready");
     expect(typed.currentGuess).toBe("c");
+  });
+
+  it("announces Blind Entry character counts without reading letters", () => {
+    const ready = {
+      ...initialState,
+      phase: "ready" as const,
+      bootstrap,
+      session,
+      activeInputPunishment: "blindEntry" as const,
+    };
+    const typed = reducer(ready, { type: "TYPE_LETTER", letter: "C" });
+    const typedAgain = reducer(typed, { type: "TYPE_LETTER", letter: "R" });
+    const deleted = reducer(typedAgain, { type: "BACKSPACE" });
+
+    expect(typed.announcement).toBe("1 of 5 letters entered.");
+    expect(typedAgain.announcement).toBe("2 of 5 letters entered.");
+    expect(deleted.announcement).toBe("1 of 5 letters entered.");
+    expect(typed.announcement).not.toContain("C");
   });
 
   it("reveals and finishes a winning guess", () => {
@@ -106,9 +124,11 @@ describe("app state machine", () => {
     expect(reversing.announcement).toContain("Reverse entry accepted as CRANE");
     expect(revealing.phase).toBe("revealing");
     const revealed = revealing.guesses[0];
-    expect(revealed && !isTimedOut(revealed) ? revealed.guess : null).toBe(
-      "crane",
-    );
+    expect(
+      revealed && !isTimedOut(revealed) && !isInvalidCommitment(revealed)
+        ? revealed.guess
+        : null,
+    ).toBe("crane");
   });
 
   it("activates a scheduled timer and records a consumed timeout row", () => {
@@ -117,6 +137,7 @@ describe("app state machine", () => {
       phase: "ready" as const,
       bootstrap,
       session,
+      reverseEntryActive: true,
     };
     const firstReveal = reducer(ready, {
       type: "GUESS_SUCCESS",
@@ -142,6 +163,7 @@ describe("app state machine", () => {
         timedOut: true,
         attempt: 2,
         status: "playing",
+        reverseEntry: { state: "resolved" },
         timer: { state: "expired" },
       },
     });
@@ -150,10 +172,12 @@ describe("app state machine", () => {
     expect(timed.timerActive?.durationSeconds).toBe(10);
     expect(expiring.phase).toBe("expiring");
     expect(timeoutReveal.guesses).toHaveLength(2);
+    expect(timeoutReveal.message).toBe("");
     const consumedAttempt = timeoutReveal.guesses[1];
     expect(consumedAttempt ? isTimedOut(consumedAttempt) : false).toBe(true);
     expect(resumed.phase).toBe("ready");
     expect(resumed.timerActive).toBeNull();
+    expect(resumed.reverseEntryActive).toBe(false);
   });
 
   it("starts a consecutive timer after a timed turn is consumed", () => {
@@ -162,6 +186,7 @@ describe("app state machine", () => {
       phase: "ready" as const,
       bootstrap,
       session,
+      reverseEntryActive: true,
       timerActive: {
         state: "activated" as const,
         durationSeconds: 10 as const,
@@ -175,6 +200,7 @@ describe("app state machine", () => {
         timedOut: true,
         attempt: 2,
         status: "playing",
+        reverseEntry: { state: "continued" },
         timer: { state: "expired" },
         nextTimer: {
           state: "activated",
@@ -188,6 +214,7 @@ describe("app state machine", () => {
 
     expect(resumed.phase).toBe("ready");
     expect(resumed.timerActive?.durationSeconds).toBe(30);
+    expect(resumed.reverseEntryActive).toBe(true);
   });
 
   it("runs Blackout after feedback and erases information through that row", () => {
@@ -351,5 +378,48 @@ describe("app state machine", () => {
     expect(revealing.intrusionActive).toEqual(intruded.intrusionActive);
     expect(stillIntruded.phase).toBe("intrusion");
     expect(stillIntruded.intrusionActive).toEqual(intruded.intrusionActive);
+  });
+
+  it("activates Blind Entry for the next guess and clears it afterward", () => {
+    const revealing = {
+      ...initialState,
+      phase: "revealing" as const,
+      bootstrap,
+      session,
+      guesses: [
+        {
+          guess: "slate",
+          feedback: "BBBBB",
+          attempt: 1,
+          status: "playing" as const,
+          punishments: [
+            {
+              kind: "blindEntry" as const,
+              state: "activated" as const,
+              effectiveAttempt: 2,
+            },
+          ],
+        },
+      ],
+    };
+    const ready = reducer(revealing, { type: "REVEAL_COMPLETE" });
+    const typed = reducer(ready, { type: "TYPE_LETTER", letter: "c" });
+
+    expect(ready.activeInputPunishment).toBe("blindEntry");
+    expect(typed.currentGuess).toBe("c");
+  });
+
+  it("locks Backspace during No Revision", () => {
+    const locked = {
+      ...initialState,
+      phase: "ready" as const,
+      bootstrap,
+      session,
+      activeInputPunishment: "noRevision" as const,
+      currentGuess: "cr",
+    };
+    const next = reducer(locked, { type: "BACKSPACE" });
+    expect(next.currentGuess).toBe("cr");
+    expect(next.message).toBe("Revision is locked.");
   });
 });

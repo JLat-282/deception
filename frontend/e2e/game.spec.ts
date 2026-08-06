@@ -36,7 +36,31 @@ const presets = [
   },
 ];
 
-async function startPractice(page: Page, preset = "Doubt II") {
+async function startPractice(
+  page: Page,
+  preset = "Doubt II",
+  useLegacyFixture = true,
+) {
+  if (useLegacyFixture) {
+    const legacyPreset = {
+      "Doubt I": "doubt-1@1",
+      "Doubt II": "doubt-2@1",
+      "Doubt III": "doubt-3@1",
+      Deception: "deception@1",
+    }[preset];
+    await page.route(
+      "**/api/games",
+      async (route) => {
+        const request = route.request();
+        const payload = request.postDataJSON();
+        await route.continue({
+          headers: { ...request.headers(), "content-type": "application/json" },
+          postData: JSON.stringify({ ...payload, presetKey: legacyPreset }),
+        });
+      },
+      { times: 1 },
+    );
+  }
   await page.getByRole("button", { name: "Play Infinite" }).click();
   await page
     .getByRole("button", {
@@ -44,6 +68,9 @@ async function startPractice(page: Page, preset = "Doubt II") {
       exact: true,
     })
     .click();
+  await expect(page.getByText("0 of 6 guesses")).toBeVisible({
+    timeout: 10_000,
+  });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -165,7 +192,7 @@ test("the Deception Guide is keyboard accessible", async ({ page }) => {
   await trigger.press("Enter");
 
   await expect(
-    page.getByRole("heading", { name: "Deception Guide" }),
+    page.getByRole("heading", { name: "How Deception Works" }),
   ).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).analyze();
   const serious = accessibility.violations.filter((violation) =>
@@ -201,7 +228,7 @@ test("Reverse Entry decodes and reveals the next accepted guess", async ({
 
   await page.keyboard.type("fight");
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Type your next guess backwards")).toBeVisible();
+  await expect(page.getByText("Reverse Entry")).toBeVisible();
 
   await page.keyboard.type("enarc");
   await page.keyboard.press("Enter");
@@ -230,7 +257,7 @@ test("invalid Daily guess does not consume, valid guess does", async ({
     page.getByText("That word is not in the accepted word list."),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Return to modes" }).click();
+  await page.getByRole("button", { name: /^(Return to modes|Modes)$/ }).click();
   await expect(
     page.getByRole("button", { name: "Begin Descent" }),
   ).toBeEnabled();
@@ -393,19 +420,22 @@ test("Blackout closes after row reveal and erases accumulated feedback", async (
   });
 
   await page.goto("/");
-  await startPractice(page);
-  for (const [index, guess] of ["slate", "fight", "picky"].entries()) {
+  await startPractice(page, "Doubt II", false);
+  for (const [index, guess] of ["slate", "fight"].entries()) {
     await page.keyboard.type(guess);
     await page.keyboard.press("Enter");
-    if (index < 2) {
-      await expect(page.getByText(`${index + 1} of 6 guesses`)).toBeVisible();
-      await expect(
-        page.getByRole("button", { name: "Enter", exact: true }),
-      ).toBeEnabled();
-    }
+    await expect(page.getByText(`${index + 1} of 6 guesses`)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Enter", exact: true }),
+    ).toBeEnabled();
   }
 
-  await expect(page.locator(".blackout-curtain")).toBeVisible();
+  const curtainAppeared = page.waitForSelector(".blackout-curtain", {
+    state: "attached",
+  });
+  await page.keyboard.type("picky");
+  await page.keyboard.press("Enter");
+  expect(await curtainAppeared).not.toBeNull();
   if (process.env.DECEPTION_CAPTURE_BLACKOUT === "true") {
     await page.screenshot({
       path: "../output/playwright/blackout-curtain.png",
@@ -485,7 +515,7 @@ test("Intrusion blocks play without pausing an active Timer", async ({
   });
 
   await page.goto("/");
-  await startPractice(page, "Doubt III");
+  await startPractice(page, "Doubt III", false);
   for (const [index, guess] of ["slate", "fight"].entries()) {
     await page.keyboard.type(guess);
     await page.keyboard.press("Enter");

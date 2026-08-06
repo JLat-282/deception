@@ -311,6 +311,9 @@ preset explicitly overrides their frequency or compatibility.
 - Invalid and incomplete words do not stop, reset, or consume the timer.
 - Expiration consumes the scheduled guess. The board records a row labeled
   `Time expired` without inventing letters or feedback.
+- When Timer and Reverse Entry overlap, expiration consumes both events for
+  that guess. Reverse Entry affects the following guess only if a distinct
+  event was separately scheduled there.
 - Expiring on the sixth attempt ends the game as a loss.
 - In the current base game, a timer takes priority when it would overlap with
   Reverse Entry. Reverse Entry does not activate for that same guess.

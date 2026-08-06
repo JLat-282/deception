@@ -203,7 +203,7 @@ describe("App", () => {
     fireEvent.click(help);
 
     expect(
-      screen.getByRole("heading", { name: "Deception Guide" }),
+      screen.getByRole("heading", { name: "How Deception Works" }),
     ).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() =>
@@ -219,7 +219,7 @@ describe("App", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "Deception Guide" }),
+      await screen.findByRole("heading", { name: "How Deception Works" }),
     ).toBeInTheDocument();
     const disclosures = screen
       .getAllByText(/How it works|Possible punishments/)
@@ -359,6 +359,237 @@ describe("App", () => {
     ).toBeDisabled();
   });
 
+  it("silently retries an early timer-expiry race and consumes the guess", async () => {
+    const startsAt = new Date(Date.now() - 1_000);
+    const deadlineAt = new Date(Date.now() - 100);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(bootstrap))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          gameId: "practice-game",
+          mode: "practice",
+          config: bootstrap.config,
+          preset: bootstrap.presets[1],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "slate",
+          feedback: "BBGBG",
+          attempt: 1,
+          status: "playing",
+          timer: {
+            state: "activated",
+            durationSeconds: 10,
+            startsAt: startsAt.toISOString(),
+            deadlineAt: deadlineAt.toISOString(),
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "TIMER_STILL_RUNNING",
+              message: "The timer is still running.",
+            },
+          },
+          409,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          timedOut: true,
+          attempt: 2,
+          status: "playing",
+          timer: { state: "expired" },
+        }),
+      );
+
+    render(<App />);
+    await startPractice();
+    await screen.findByText("0 of 6 guesses");
+    for (const letter of "slate") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    await screen.findByText("2 of 6 guesses", undefined, { timeout: 3_000 });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(screen.queryByRole("button", { name: "Retry timer" })).toBeNull();
+  });
+
+  it("retries a recoverable guess without losing the entered word", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(bootstrap))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          gameId: "practice-game",
+          mode: "practice",
+          config: bootstrap.config,
+          preset: bootstrap.presets[1],
+        }),
+      )
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "crane",
+          feedback: "GGGGG",
+          attempt: 1,
+          status: "won",
+          answer: "crane",
+        }),
+      );
+
+    render(<App />);
+    await startPractice();
+    await screen.findByText("0 of 6 guesses");
+    for (const letter of "crane") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry guess" }));
+
+    expect(
+      await screen.findByRole(
+        "heading",
+        { name: "Word found." },
+        { timeout: 2_000 },
+      ),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("ignores a timer retry after returning to modes", async () => {
+    const startsAt = new Date(Date.now() - 1_000);
+    const deadlineAt = new Date(Date.now() - 100);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(bootstrap))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          gameId: "practice-game",
+          mode: "practice",
+          config: bootstrap.config,
+          preset: bootstrap.presets[1],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "slate",
+          feedback: "BBGBG",
+          attempt: 1,
+          status: "playing",
+          timer: {
+            state: "activated",
+            durationSeconds: 10,
+            startsAt: startsAt.toISOString(),
+            deadlineAt: deadlineAt.toISOString(),
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "TIMER_STILL_RUNNING",
+              message: "The timer is still running.",
+            },
+          },
+          409,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(bootstrap));
+
+    render(<App />);
+    await startPractice();
+    await screen.findByText("0 of 6 guesses");
+    for (const letter of "slate") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    fireEvent.click(screen.getByRole("button", { name: /Return to modes/ }));
+
+    expect(
+      await screen.findByRole("button", { name: "Begin Descent" }),
+    ).toBeInTheDocument();
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("keeps all five Blind Entry letters hidden until submission", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(bootstrap))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          gameId: "practice-game",
+          mode: "practice",
+          config: bootstrap.config,
+          preset: bootstrap.presets[1],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "fight",
+          feedback: "BBBBB",
+          attempt: 1,
+          status: "playing",
+          punishments: [
+            {
+              kind: "blindEntry",
+              state: "activated",
+              effectiveAttempt: 2,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          guess: "crane",
+          feedback: "GGGGG",
+          attempt: 2,
+          status: "won",
+          answer: "crane",
+        }),
+      );
+
+    render(<App />);
+    await startPractice();
+    await screen.findByText("0 of 6 guesses");
+    for (const letter of "fight") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+    fireEvent.keyDown(window, { key: "Enter" });
+    await screen.findByText("Blind Entry", undefined, { timeout: 2_000 });
+
+    for (const letter of "crane") {
+      fireEvent.keyDown(window, { key: letter });
+    }
+
+    expect(
+      screen.getAllByRole("cell", {
+        name: /letter hidden during Blind Entry/,
+      }),
+    ).toHaveLength(5);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(
+      await screen.findByRole(
+        "heading",
+        { name: "Word found." },
+        { timeout: 2_000 },
+      ),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   it("activates Reverse Entry and submits the next word backwards", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -401,7 +632,7 @@ describe("App", () => {
     fireEvent.keyDown(window, { key: "Enter" });
 
     expect(
-      await screen.findByText("Type your next guess backwards", undefined, {
+      await screen.findByText("Reverse Entry", undefined, {
         timeout: 2_000,
       }),
     ).toBeInTheDocument();
@@ -465,7 +696,7 @@ describe("App", () => {
       fireEvent.keyDown(window, { key: letter });
     }
     fireEvent.keyDown(window, { key: "Enter" });
-    await screen.findByText("Type your next guess backwards", undefined, {
+    await screen.findByText("Reverse Entry", undefined, {
       timeout: 2_000,
     });
 

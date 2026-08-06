@@ -67,16 +67,16 @@ def _optional_lie_rows(raw_value: str | None) -> tuple[int, ...] | None:
         rows = tuple(int(value.strip()) for value in raw_value.split(","))
     except ValueError as error:
         raise ValueError(
-            "DECEPTION_FIXED_LIE_ROWS must contain one or two distinct "
+            "DECEPTION_FIXED_LIE_ROWS must contain one through five distinct "
             "integers from 1 through 6."
         ) from error
     if (
-        len(rows) not in {1, 2}
+        len(rows) not in range(1, 6)
         or len(set(rows)) != len(rows)
         or any(row not in range(1, 7) for row in rows)
     ):
         raise ValueError(
-            "DECEPTION_FIXED_LIE_ROWS must contain one or two distinct "
+            "DECEPTION_FIXED_LIE_ROWS must contain one through five distinct "
             "integers from 1 through 6."
         )
     return tuple(sorted(rows))
@@ -187,7 +187,7 @@ class Settings:
     blackout_enabled: bool = False
     fixed_blackout_roll: float | None = None
     fixed_blackout_attempt: int | None = None
-    deception_decision_budget_ms: int = 100
+    deception_decision_budget_ms: int = 40
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -257,6 +257,6 @@ class Settings:
                 _optional_decision_budget(
                     os.getenv("DECEPTION_DECISION_BUDGET_MS")
                 )
-                or 100
+                or 40
             ),
         )

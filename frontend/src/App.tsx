@@ -24,6 +24,11 @@ import { waitForRevealStart } from "./game/revealTiming";
 import { initialState, reducer } from "./game/state";
 
 export const GUIDE_SEEN_STORAGE_KEY = "deception-guide-seen-v1";
+const TIMER_EXPIRY_RETRY_DELAY_MS = 100;
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
 function hasSeenGuide(): boolean {
   try {
@@ -68,6 +73,8 @@ export default function App() {
   const guideCheckComplete = useRef(false);
   const infiniteButtonRef = useRef<HTMLButtonElement>(null);
   const dailyContinuationToken = useRef<string | null>(null);
+  const sessionEpoch = useRef(0);
+  const attemptRequest = useRef(0);
 
   const closeHelp = useCallback(() => {
     setHelpOpen(false);
@@ -82,11 +89,16 @@ export default function App() {
   }, [resultOpen]);
 
   const loadBootstrap = useCallback(async () => {
+    const epoch = sessionEpoch.current + 1;
+    sessionEpoch.current = epoch;
+    attemptRequest.current += 1;
     dispatch({ type: "BOOTSTRAP_LOADING" });
     try {
       const bootstrap = await api.bootstrap();
+      if (sessionEpoch.current !== epoch) return;
       dispatch({ type: "BOOTSTRAP_SUCCESS", payload: bootstrap });
     } catch (error) {
+      if (sessionEpoch.current !== epoch) return;
       dispatch({
         type: "FAILURE",
         scope: "bootstrap",
@@ -111,6 +123,7 @@ export default function App() {
   }, [state.bootstrap]);
 
   const startGame = useCallback(async (mode: GameMode, presetKey?: string) => {
+    const epoch = sessionEpoch.current;
     setHelpOpen(false);
     setResultOpen(false);
     setStartingPresetKey(presetKey ?? null);
@@ -122,9 +135,11 @@ export default function App() {
         dailyContinuationToken.current = continuationToken ?? null;
       }
       const session = await api.startGame(mode, presetKey, continuationToken);
+      if (sessionEpoch.current !== epoch) return;
       setInfiniteSelectOpen(false);
       dispatch({ type: "START_SUCCESS", payload: session });
     } catch (error) {
+      if (sessionEpoch.current !== epoch) return;
       dispatch({
         type: "FAILURE",
         scope: "start",
@@ -137,7 +152,9 @@ export default function App() {
   }, []);
 
   const submitGuess = useCallback(async () => {
-    if (!state.session || state.phase !== "ready") return;
+    const retryingGuess =
+      state.phase === "error" && state.errorScope === "guess";
+    if (!state.session || (state.phase !== "ready" && !retryingGuess)) return;
     if (state.currentGuess.length !== state.session.config.wordLength) {
       dispatch({
         type: "LOCAL_MESSAGE",
@@ -147,12 +164,16 @@ export default function App() {
     }
 
     const enteredGuess = state.currentGuess;
+    const gameId = state.session.gameId;
+    const epoch = sessionEpoch.current;
+    const request = attemptRequest.current + 1;
+    attemptRequest.current = request;
     dispatch({ type: "SUBMITTING" });
     const revealWindow = waitForRevealStart();
     try {
       const [result] = await Promise.all([
         api.submitGuess(
-          state.session.gameId,
+          gameId,
           state.currentGuess,
           state.session.mode === "daily"
             ? (dailyContinuationToken.current ?? undefined)
@@ -160,39 +181,99 @@ export default function App() {
         ),
         revealWindow,
       ]);
+      if (
+        sessionEpoch.current !== epoch ||
+        attemptRequest.current !== request
+      ) {
+        return;
+      }
       dispatch({
         type: "GUESS_SUCCESS",
         payload: result,
         enteredGuess,
       });
     } catch (error) {
+      if (
+        sessionEpoch.current !== epoch ||
+        attemptRequest.current !== request
+      ) {
+        return;
+      }
       dispatch({
         type: "FAILURE",
         scope: "guess",
         message: errorMessage(error),
         recoverable: isRecoverableServiceError(error),
+        code: error instanceof ApiError ? error.code : undefined,
       });
     }
-  }, [state.currentGuess, state.phase, state.session]);
+  }, [state.currentGuess, state.errorScope, state.phase, state.session]);
+
+  useEffect(() => {
+    if (
+      state.phase === "ready" &&
+      state.activeInputPunishment === "forcedCommitment" &&
+      state.session &&
+      state.currentGuess.length === state.session.config.wordLength
+    ) {
+      void submitGuess();
+    }
+  }, [
+    state.activeInputPunishment,
+    state.currentGuess.length,
+    state.phase,
+    state.session,
+    submitGuess,
+  ]);
 
   const expireTimer = useCallback(async () => {
     if (!state.session || !state.timerActive) return;
+    const gameId = state.session.gameId;
+    const epoch = sessionEpoch.current;
+    const request = attemptRequest.current + 1;
+    attemptRequest.current = request;
     dispatch({ type: "TIMER_EXPIRING" });
-    try {
-      const result = await api.expireTimer(
-        state.session.gameId,
-        state.session.mode === "daily"
-          ? (dailyContinuationToken.current ?? undefined)
-          : undefined,
-      );
-      dispatch({ type: "TIMEOUT_SUCCESS", payload: result });
-    } catch (error) {
-      dispatch({
-        type: "FAILURE",
-        scope: "timer",
-        message: errorMessage(error),
-        recoverable: true,
-      });
+    for (;;) {
+      if (
+        sessionEpoch.current !== epoch ||
+        attemptRequest.current !== request
+      ) {
+        return;
+      }
+      try {
+        const result = await api.expireTimer(
+          gameId,
+          state.session.mode === "daily"
+            ? (dailyContinuationToken.current ?? undefined)
+            : undefined,
+        );
+        if (
+          sessionEpoch.current !== epoch ||
+          attemptRequest.current !== request
+        ) {
+          return;
+        }
+        dispatch({ type: "TIMEOUT_SUCCESS", payload: result });
+        return;
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "TIMER_STILL_RUNNING") {
+          await wait(TIMER_EXPIRY_RETRY_DELAY_MS);
+          continue;
+        }
+        if (
+          sessionEpoch.current !== epoch ||
+          attemptRequest.current !== request
+        ) {
+          return;
+        }
+        dispatch({
+          type: "FAILURE",
+          scope: "timer",
+          message: errorMessage(error),
+          recoverable: true,
+        });
+        return;
+      }
     }
   }, [state.session, state.timerActive]);
 
@@ -301,6 +382,19 @@ export default function App() {
     () => buildKeyboardFeedback(state.guesses, state.blackoutCutoffAttempt),
     [state.blackoutCutoffAttempt, state.guesses],
   );
+
+  const activePunishmentLabels = [
+    reverseNoticeVisible && state.reverseEntryActive ? "Reverse Entry" : null,
+    state.activeInputPunishment === "blindEntry"
+      ? "Blind Entry"
+      : state.activeInputPunishment === "forcedCommitment"
+        ? "Forced Commitment"
+        : state.activeInputPunishment === "noRevision"
+          ? "No Revision"
+          : null,
+    state.memoryTaxActive ? "Memory Tax" : null,
+    state.corruptedRowAttempt !== null ? "History Corrupted" : null,
+  ].filter((label): label is string => label !== null);
 
   if (state.phase === "booting") {
     return (
@@ -430,9 +524,13 @@ export default function App() {
           {state.announcement}
         </p>
         <div className="board-area">
-          {reverseNoticeVisible ? (
-            <div className="reverse-entry-strip" role="status">
-              <strong>Type your next guess backwards</strong>
+          {activePunishmentLabels.length ? (
+            <div className="punishment-status" role="status">
+              <ul aria-label="Active punishments">
+                {activePunishmentLabels.map((label) => (
+                  <li key={label}>{label}</li>
+                ))}
+              </ul>
             </div>
           ) : null}
           <GameBoard
@@ -442,6 +540,14 @@ export default function App() {
             guesses={state.guesses}
             revealing={state.phase === "revealing"}
             blackoutCutoffAttempt={state.blackoutCutoffAttempt}
+            corruptedRowAttempt={state.corruptedRowAttempt}
+            memoryTaxRetainRows={
+              state.memoryTaxActive ? state.memoryTaxRetainRows : null
+            }
+            blindCurrentEntry={state.activeInputPunishment === "blindEntry"}
+            forcedCommitmentActive={
+              state.activeInputPunishment === "forcedCommitment"
+            }
             reverseTransition={
               state.reverseTransition
                 ? {
@@ -512,6 +618,10 @@ export default function App() {
           onLetter={onLetter}
           onEnter={() => void submitGuess()}
           onBackspace={onBackspace}
+          backspaceLocked={
+            state.activeInputPunishment === "noRevision" &&
+            state.currentGuess.length > 0
+          }
         />
         <FeedbackLegend />
 

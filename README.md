@@ -1,8 +1,8 @@
 # Deception
 
 Deception is a five-letter word game where the feedback can lie. The ordinary
-Wordle rules remain intact, but secretly selected rows may each show one
-believable false tile.
+Wordle rules remain intact, but secretly selected rows may show believable
+false feedback on one or two tiles.
 
 Planning references:
 
@@ -11,9 +11,9 @@ Planning references:
 
 The app supports:
 
-- A shared Daily puzzle that resets at 03:00 UTC.
+- A four-stage Daily Descent that resets at 03:00 UTC.
 - One anonymous-browser Daily attempt, consumed by the first accepted guess.
-- Practice games with a fresh answer and unrestricted replay.
+- Infinite games with a fresh answer and unrestricted replay.
 - Four versioned Practice difficulty presets, from Doubt I through Deception.
 - Standard repeated-letter Wordle evaluation.
 - A hidden preset-owned lie and punishment blueprint persisted with each game.
@@ -68,7 +68,7 @@ DECEPTION_DAILY_SEED=<a long random secret>
 DECEPTION_SECURE_COOKIE=true
 ```
 
-For Supabase, apply the three checked-in SQL files in
+For Supabase, apply the checked-in SQL files in
 [`supabase/migrations`](supabase/migrations) in filename order before deploying.
 The exact order and connection-string guidance are documented in
 [`supabase/README.md`](supabase/README.md). Production does not run schema DDL
@@ -88,6 +88,10 @@ npm run dev
 npm test
 npm run test:e2e
 npm run benchmark:deception
+npm run benchmark:punishments
+npm run balance:simulate
+npm run balance:activation
+npm run balance:trace -- --preset deception@3 --answer crane --guess slate
 npm run build
 npm run lint
 ```
@@ -96,10 +100,14 @@ Backend tests create a unique temporary directory under `.tmp/` for each run
 and remove it automatically. This avoids shared-temp permission and file-lock
 problems in OneDrive workspaces.
 
-The deception benchmark reports planner latency at several history depths.
-Pass `-- --enforce-target` to verify the current implementation remains at
-least 40% faster than the recorded pre-optimization local baseline and keeps
-the constraint-backed fallback below its 100ms p99 budget.
+The deception benchmark enforces 25ms common-path and 35ms maximum-history p99
+budgets with a 50ms p99.9 ceiling. The punishment benchmark enforces a 3ms p99
+and 10ms p99.9 ceiling for schema-6 blueprint generation. `balance:simulate`
+runs 100,000 seeded blueprints and fails on probability, compatibility,
+pressure-stack, or latency drift. `balance:activation` plays representative
+high-information histories through every level and gates early lie activation
+plus decision latency. `balance:trace` provides a private contributor view of
+one seed without expanding the public API.
 
 FastAPI publishes the local API schema at
 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
@@ -128,10 +136,13 @@ probabilities remain server-only.
 
 The database stores `truth_feedback` and `display_feedback` separately. The
 truth engine remains the only source of Wordle evaluation. On a selected row,
-the deception planner first seeks feedback supported by a plausible alternative
-answer. If none exists, it may fabricate a yellow for a previously untouched
-letter without contradicting fixed visible information. Active API responses
-never expose truthful feedback, scheduled rows, seeds, or decoy candidates.
+the deception planner scores credible player-belief worlds: an alternate answer
+may explain the board when a difficulty-bounded number of prior displayed tiles
+are treated as lies. This gives early guesses broad deceptive freedom without
+requiring one exact dictionary decoy. Late unsupported rare-letter probes may
+remain truthful. If no belief-backed choice exists, the planner may fabricate a
+supported yellow on a previously untouched letter. Active API responses never
+expose truthful feedback, scheduled rows, seeds, or candidate worlds.
 
 Daily schedules are stored once per puzzle so every player faces the same
 possible lie timing. Practice schedules are stored per game. Schema upgrades
@@ -140,95 +151,66 @@ already using the one-row rules keep their stored schedule.
 
 ## Current preset behavior
 
-- Doubt I provides one possible lie row, lighter Timer and Reverse Entry odds,
-  no Blackout, and at most one punishment.
-- Doubt II preserves the complete existing rules described below.
-- Doubt III adds two or three possible lie rows, occasional coordinated
-  two-tile lies, repeated Timers and Reverse Entry, and controlled punishment
-  overlap.
-- Deception adds three to five possible lie rows, broader punishment overlap,
-  up to three Timers and Reverse Entry events, and a rare False Victory threat.
-- Intrusion can repeatedly obstruct part of the board after guesses two through
-  five. Its per-row chance is 0% / 10% / 30% / 60% from Doubt I through
-  Deception.
-- Daily remains pinned to `doubt-2@1` during this milestone.
+New games use the `@3` preset family and schema-6 blueprints. Stored `@1` and
+`@2` games retain their exact preset, schedule, and strategy. Daily Descent
+puzzles pin their preset set for the full daily run.
+
+| Difficulty | Scheduled lie-row distribution | Two-tile chance per row |
+| --- | --- | --- |
+| Doubt I | 1: 85%, 2: 15% | 0% |
+| Doubt II | 1: 20%, 2: 75%, 3: 5% | 0% |
+| Doubt III | 2: 25%, 3: 70%, 4: 5% | 35% |
+| Deception | 3: 5%, 4: 40%, 5: 55% | 65% |
+
+The exact rows are selected uniformly without replacement. There are no phase
+patterns or guaranteed early/middle/late quotas. Winning guesses and guess six
+remain truthful. A scheduled row may also stay truthful when no credible lie
+survives the quality and deadline gates. Repeat lie threads are possible at
+every difficulty but become more likely as difficulty rises.
+
+Doubt I permits at most one punishment. Doubt II allows light overlap. Doubt
+III and Deception coordinate high-pressure scenes while keeping the exact
+combination and timing unpredictable. Reverse Entry and Forced Commitment may
+combine on the top two levels; a ten-second Timer can never join that two-input
+stack. Distinct Reverse Entry events may be scheduled on consecutive guesses.
+The current pressure pass targets Timers in 95% of Doubt III games and every
+Deception game, Reverse Entry in 55% and 75%, and Blackout in 75% and 95%.
+Blackout stays on guesses three through five and favors guesses four and five.
+The result dialog explains lies but does not recap punishments.
 
 The complete tuning matrix and delivery boundary live in
 `docs/DIFFICULTY_AND_DAILY_DESCENT_DESIGN.md`.
 
-### Doubt II
-
-- One row is scheduled 20% of the time and two distinct rows are scheduled 80%
-  of the time.
-- Invalid guesses do not advance the schedule.
-- An eligible selected row from one through five may change exactly one
-  feedback marker.
-- The lie may hide a true clue or create false certainty.
-- Winning guesses and the sixth guess remain truthful.
-- If no curated answer supports a lie, the planner may fabricate one safe
-  yellow on a previously untouched letter.
-- If neither an answer-backed nor constraint-backed lie is safe, the row
-  remains truthful.
-- Two activated lies never reuse the same tile position.
-- The terminal response reveals every selected row and whether it lied.
-
-### Doubt III
-
-- Two lie rows are scheduled 40% of the time and three are scheduled 60% of
-  the time.
-- Each scheduled row has a 25% chance to seek a jointly plausible two-tile
-  lie. The planner falls back to one tile, then truthful feedback, when needed.
-- Timer and Reverse Entry may each occur up to twice, including on consecutive
-  turns.
-- Punishments may overlap. A 30-second Timer may begin after Blackout's curtain;
-  a 10-second Timer is moved to another eligible turn instead.
-- Blackout remains limited to once per game, and winning guesses cancel newly
-  scheduled punishments.
-
-### Deception
-
-- Three, four, or five lie rows are scheduled, with a 50% chance per row to
-  seek a coordinated two-tile lie.
-- Every game receives at least one Timer and may receive as many as three, but
-  never on three consecutive guesses.
-- Timer, Reverse Entry, and Blackout may overlap. Timers begin only after the
-  Blackout curtain has reopened.
-- In 5% of games, one correct answer on guesses two through four may receive
-  plausible false feedback when it lands on a scheduled lie row. Any later
-  submission of that answer is guaranteed to win.
-- Guesses five and six always recognize the correct answer.
-
 ## Punishment behavior
 
 - Reverse Entry may require the next accepted word to be typed backwards.
-- Each game has a 45% chance to receive one secretly scheduled Guess Timer on
-  attempts two through six.
-- Scheduled timers are 30 seconds 70% of the time and 10 seconds 30% of the
-  time.
+- Timer count and duration scale by difficulty; Deception always schedules at
+  least one and may schedule as many as three.
 - Timer deadlines are persisted and enforced by the API. Invalid words do not
   stop or reset the countdown.
 - Expiration consumes the current attempt and records a `Time expired` row
   without creating fake feedback.
-- Doubt II has a 20% chance to schedule Blackout after attempt three, four, or
-  five, with each attempt equally likely.
+- If Reverse Entry affected the expired attempt, that event ends with the lost
+  guess. Only a separately scheduled Reverse Entry can affect the next guess.
+- Blind Entry conceals typed letters until the guess is submitted. No Revision
+  locks Backspace after the first letter. Forced Commitment submits the fifth
+  letter immediately and consumes an invalid committed attempt.
+- Corrupted History temporarily masks one prior row. Memory Tax persistently
+  leaves only the two newest rows visible until terminal history restoration.
 - Blackout erases accumulated color feedback and resets the keyboard. Future
   guesses reveal normally, and the full board returns after the game ends.
-- Multiple punishments may occur in one base game, but never on the same
-  attempt. Blackout also reserves the immediately following attempt so players
-  do not emerge directly into Guess Timer or Reverse Entry.
-- Guess Timer keeps priority over Reverse Entry if those two would otherwise
-  overlap.
 - Intrusion takes over the screen and blocks all guess input until its moving
-  Dismiss control is activated. It
-  has no per-game cap, may repeat on consecutive eligible guesses, and does not
-  pause an active Timer. If it overlaps Blackout, it appears after the curtain
-  has reopened.
+  Dismiss control is activated. It has no separate per-game cap and does not
+  pause an active Timer.
+- Every blueprint passes pressure-budget, lifecycle, overlap, and final-attempt
+  validation before it is stored. Winning guesses cancel pending post-guess
+  punishments.
 
-The planner filters the curated answer corpus once against the visible history,
-groups possible current feedback patterns, and selects from the smallest
-supported decoy group. Its fallback ranks safe false-yellow candidates using a
-support index built once from accepted words. This avoids rescanning either
-corpus for every mutation.
+The planner caches per-guess truth patterns, scans candidate answer worlds once,
+and aggregates the false markers those worlds support. It returns the best
+candidate found if the deadline arrives after any plausible option; truth is
+returned only when no candidate survives or the strategy forbids one. Private
+diagnostics distinguish no candidate, deadline expiration, and strategy limits.
 
 ## Daily attempt behavior
 
@@ -254,8 +236,8 @@ DECEPTION_FIXED_SESSION_SEED
 ```
 
 `DECEPTION_FIXED_LIE_ROW` preserves the single-row test override.
-`DECEPTION_FIXED_LIE_ROWS` accepts one or two distinct comma-separated rows,
-such as `1,3`. These values are never returned by bootstrap, game-start, or
+`DECEPTION_FIXED_LIE_ROWS` accepts one through five distinct comma-separated
+rows, such as `1,3,5`. These values are never returned by bootstrap, game-start, or
 active-guess responses.
 
 ## Source references

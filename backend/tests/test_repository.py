@@ -120,4 +120,5 @@ def test_legacy_migration_is_serialized_across_initializers(
     assert "preset_key" in columns
     assert "blueprint_json" in columns
     assert "deception_reason" in guess_columns
-    assert schema_version == 10
+    assert "deception_diagnostics_json" in guess_columns
+    assert schema_version == 11

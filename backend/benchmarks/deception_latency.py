@@ -18,37 +18,34 @@ class Scenario:
     name: str
     guess: str
     prior_guesses: tuple[str, ...]
-    baseline_p50_ms: float | None
+    maximum_p99_ms: float
     answer: str = "crane"
-    maximum_p99_ms: float | None = None
     must_activate: bool = False
     max_false_tiles: int = 1
 
 
 SCENARIOS = (
-    Scenario("first selected row", "slate", (), 18.94),
-    Scenario("selected row after one guess", "fight", ("slate",), 35.61),
+    Scenario("first selected row", "slate", (), 25),
+    Scenario("selected row after one guess", "fight", ("slate",), 25),
     Scenario(
         "selected row after four guesses",
         "shack",
         ("slate", "fight", "mould", "berry"),
-        30.11,
+        35,
     ),
     Scenario(
         name="constraint-backed fallback",
         guess="picky",
         prior_guesses=("stare", "cloud"),
-        baseline_p50_ms=None,
+        maximum_p99_ms=25,
         answer="gnash",
-        maximum_p99_ms=100,
         must_activate=True,
     ),
     Scenario(
         name="Doubt III coordinated two-tile search",
         guess="slate",
         prior_guesses=(),
-        baseline_p50_ms=None,
-        maximum_p99_ms=100,
+        maximum_p99_ms=35,
         must_activate=True,
         max_false_tiles=2,
     ),
@@ -56,8 +53,7 @@ SCENARIOS = (
         name="Deception False Victory search",
         guess="crane",
         prior_guesses=("fight",),
-        baseline_p50_ms=None,
-        maximum_p99_ms=100,
+        maximum_p99_ms=35,
         must_activate=True,
         max_false_tiles=2,
     ),
@@ -114,6 +110,7 @@ def benchmark_scenario(
         "p50": median(timings),
         "p95": percentile(timings, 0.95),
         "p99": percentile(timings, 0.99),
+        "p99.9": percentile(timings, 0.999),
         "max": max(timings),
     }
 
@@ -127,8 +124,7 @@ def main() -> int:
         "--enforce-target",
         action="store_true",
         help=(
-            "Fail unless optimized scenarios remain at least 40% faster "
-            "than baseline and budgeted scenarios remain within budget."
+            "Fail unless p99 and hard-ceiling latency gates are met."
         ),
     )
     args = parser.parse_args()
@@ -153,18 +149,14 @@ def main() -> int:
         metrics = "  ".join(
             f"{name}={value:.2f}ms" for name, value in results.items()
         )
-        if scenario.baseline_p50_ms is not None:
-            reduction = (
-                1 - results["p50"] / scenario.baseline_p50_ms
-            ) * 100
-            scenario_met = reduction >= 40
-            summary = f"p50 reduction={reduction:.1f}%"
-        elif scenario.maximum_p99_ms is not None:
-            scenario_met = results["p99"] <= scenario.maximum_p99_ms
-            summary = f"p99 budget={scenario.maximum_p99_ms:.0f}ms"
-        else:
-            scenario_met = True
-            summary = ""
+        scenario_met = (
+            results["p99"] <= scenario.maximum_p99_ms
+            and results["p99.9"] <= 50
+        )
+        summary = (
+            f"p99 budget={scenario.maximum_p99_ms:.0f}ms "
+            "p99.9 ceiling=50ms"
+        )
         target_met = target_met and scenario_met
         print(f"- {scenario.name}: {metrics}  {summary}".rstrip())
 

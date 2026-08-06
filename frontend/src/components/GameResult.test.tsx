@@ -127,6 +127,9 @@ describe("GameResult", () => {
         "Row 4 was selected, but you finished before reaching it.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Punishments" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reveals when Deception rejected an earlier correct answer", () => {

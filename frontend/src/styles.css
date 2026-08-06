@@ -881,7 +881,7 @@ button:disabled {
   animation: timer-pulse 900ms ease-in-out infinite;
 }
 
-.reverse-entry-strip {
+.punishment-status {
   position: absolute;
   top: 50%;
   right: calc(100% + 72px);
@@ -891,11 +891,19 @@ button:disabled {
   font-family: "Cormorant Garamond", serif;
   font-size: 1.45rem;
   font-weight: 700;
-  letter-spacing: 0.025em;
+  letter-spacing: 0.04em;
   line-height: 1.08;
   text-align: center;
   text-transform: uppercase;
   text-shadow: 0 0 18px rgb(210 45 72 / 28%);
+}
+
+.punishment-status ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 0.55rem;
+  list-style: none;
 }
 
 .game-board {
@@ -1060,6 +1068,57 @@ button:disabled {
 .tile--blackout .tile-letter {
   opacity: 0.58;
   text-shadow: 0 0 8px rgb(0 0 0 / 88%);
+}
+
+.tile--blind-entry {
+  border-color: rgb(148 95 192 / 72%);
+  background: #070609;
+  box-shadow:
+    inset 0 -2px 0 rgb(148 95 192 / 52%),
+    inset 0 0 16px rgb(100 49 131 / 16%);
+}
+
+.tile--forced-commitment {
+  border-bottom-color: var(--crimson);
+  box-shadow: inset 0 -2px 0 rgb(210 45 72 / 68%);
+}
+
+.tile--corrupted {
+  color: transparent;
+  border-color: #55445d;
+  background:
+    linear-gradient(176deg, transparent 38%, #6f398f 39% 43%, transparent 44%),
+    linear-gradient(4deg, #0a080c 42%, #2a132f 43% 49%, #070608 50%);
+  box-shadow: inset 0 0 16px rgb(0 0 0 / 78%);
+}
+
+.tile--memory-tax {
+  color: transparent;
+  border-color: #242027;
+  background: #050506;
+  box-shadow: inset 0 0 20px rgb(0 0 0 / 90%);
+  animation: memory-tax-fade 220ms ease-out both;
+}
+
+.tile--invalid-commitment {
+  border-color: rgb(210 45 72 / 55%);
+  background: rgb(168 21 47 / 9%);
+}
+
+.key--locked {
+  color: #5f5861;
+  border-color: #29242b;
+  background: #100e12;
+  box-shadow: inset 0 0 0 1px rgb(210 45 72 / 18%);
+}
+
+@keyframes memory-tax-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.34;
+  }
 }
 
 .tile--revealing {
@@ -1426,6 +1485,12 @@ button:disabled {
   font-size: 1.45rem;
 }
 
+.deception-result .deception-thread {
+  margin: 0.7rem 0 0;
+  color: var(--text);
+  font-weight: 650;
+}
+
 .deception-result ol {
   margin: 0.75rem 0 0;
   padding-left: 1.35rem;
@@ -1512,14 +1577,17 @@ button:disabled {
 
 .help-sections {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  padding: 0.8rem 1rem 0.9rem;
-  gap: 0.75rem 1rem;
+  grid-template-columns: 1fr;
+  padding: 0 1rem 0.35rem;
 }
 
 .help-sections section {
-  padding-left: 1rem;
-  border-left: 2px solid rgb(210 45 72 / 72%);
+  padding: 1rem 0 1.05rem;
+  border-bottom: 2px solid rgb(210 45 72 / 64%);
+}
+
+.help-sections section:last-child {
+  border-bottom: 0;
 }
 
 .help-sections h3 {
@@ -1529,11 +1597,22 @@ button:disabled {
   font-size: 1.35rem;
 }
 
-.help-sections p {
-  margin: 0.25rem 0 0;
+.guide-points {
+  display: grid;
+  margin: 0.45rem 0 0;
+  padding-left: 1.2rem;
+  gap: 0.35rem;
   color: var(--text-muted);
   font-size: 1rem;
   line-height: 1.45;
+}
+
+.guide-points li {
+  padding-left: 0.2rem;
+}
+
+.guide-points li::marker {
+  color: var(--crimson);
 }
 
 .punishment-list {
@@ -1558,6 +1637,11 @@ button:disabled {
 .punishment-list span {
   color: var(--text-muted);
   line-height: 1.45;
+}
+
+.punishment-status li + li {
+  padding-top: 0.55rem;
+  border-top: 1px solid rgb(210 45 72 / 34%);
 }
 
 @media (max-width: 620px) {
@@ -1652,14 +1736,13 @@ button:disabled {
     font-size: 3.3rem;
   }
 
-  .reverse-entry-strip {
+  .punishment-status {
     position: static;
     width: 100%;
     min-height: 1.35rem;
     margin-bottom: 0.45rem;
     transform: none;
     font-size: 1.15rem;
-    text-align: center;
   }
 }
 
@@ -1835,9 +1918,8 @@ button:disabled {
     font-size: 0.78rem;
   }
 
-  .reverse-entry-strip {
+  .punishment-status {
     font-size: 1.05rem;
-    letter-spacing: 0.025em;
   }
 }
 
@@ -1863,6 +1945,11 @@ button:disabled {
     animation-name: tile-fade;
     animation-duration: 120ms;
     animation-delay: 0ms;
+  }
+
+  .tile--memory-tax,
+  .tile--corrupted {
+    animation: tile-fade 100ms linear both;
   }
 
   .tile--reversing,

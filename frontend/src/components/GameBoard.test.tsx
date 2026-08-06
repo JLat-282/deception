@@ -124,4 +124,94 @@ describe("GameBoard", () => {
     expect(container.querySelectorAll(".tile--blackout")).toHaveLength(5);
     expect(container.querySelector(".tile--g")).not.toBeInTheDocument();
   });
+
+  it("conceals a complete Blind Entry until it is submitted", () => {
+    const { container } = render(
+      <GameBoard
+        wordLength={5}
+        maxGuesses={6}
+        currentGuess="crane"
+        guesses={[]}
+        revealing={false}
+        blindCurrentEntry
+      />,
+    );
+    expect(container.querySelectorAll(".tile--blind-entry")).toHaveLength(5);
+    expect(screen.queryByText("C")).not.toBeInTheDocument();
+    expect(screen.queryByText("E")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("cell", {
+        name: "Position 1, letter hidden during Blind Entry",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows Blind Entry progress without exposing its letters", () => {
+    const { container, rerender } = render(
+      <GameBoard
+        wordLength={5}
+        maxGuesses={6}
+        currentGuess="c"
+        guesses={[]}
+        revealing={false}
+        blindCurrentEntry
+      />,
+    );
+
+    expect(container.querySelectorAll(".tile--blind-entry")).toHaveLength(1);
+    expect(container.querySelectorAll(".tile--filled")).toHaveLength(1);
+    expect(screen.queryByText("C")).not.toBeInTheDocument();
+
+    rerender(
+      <GameBoard
+        wordLength={5}
+        maxGuesses={6}
+        currentGuess="cran"
+        guesses={[]}
+        revealing={false}
+        blindCurrentEntry
+      />,
+    );
+
+    expect(container.querySelectorAll(".tile--blind-entry")).toHaveLength(4);
+    expect(container.querySelectorAll(".tile--filled")).toHaveLength(4);
+    expect(screen.queryByText("R")).not.toBeInTheDocument();
+  });
+
+  it("masks corrupted and Memory Tax rows without shifting the grid", () => {
+    const guesses = [
+      {
+        guess: "slate",
+        feedback: "BBBBB",
+        attempt: 1,
+        status: "playing" as const,
+      },
+      {
+        guess: "fight",
+        feedback: "BBBBB",
+        attempt: 2,
+        status: "playing" as const,
+      },
+      {
+        guess: "mould",
+        feedback: "BBBBB",
+        attempt: 3,
+        status: "playing" as const,
+      },
+    ];
+    const { container } = render(
+      <GameBoard
+        wordLength={5}
+        maxGuesses={6}
+        currentGuess=""
+        guesses={guesses}
+        revealing={false}
+        memoryTaxRetainRows={2}
+        corruptedRowAttempt={2}
+      />,
+    );
+    expect(container.querySelectorAll(".tile--memory-tax")).toHaveLength(5);
+    expect(container.querySelectorAll(".tile--corrupted")).toHaveLength(5);
+    expect(screen.getAllByRole("cell")).toHaveLength(30);
+  });
 });

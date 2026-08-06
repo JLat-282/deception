@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
+import json
 import secrets
 from typing import Callable
 
@@ -49,6 +50,10 @@ from .schemas import (
     GuessResponse,
     NotActivatedDeceptionReveal,
     CompletedGuessTimer,
+    InvalidCommitmentResponse,
+    PunishmentReport,
+    PunishmentReportEvent,
+    PunishmentUpdate,
     ReverseEntryUpdate,
     StartGameResponse,
     TimedOutResponse,
@@ -140,6 +145,9 @@ class GameService:
                 run = self.repository.get_daily_descent_run(
                     connection, device_id, window.puzzle_key
                 )
+            current_puzzles = self.repository.list_daily_descent_puzzles(
+                connection, window.puzzle_key
+            )
         run_status = run.status if run is not None else "unstarted"
         current_stage = run.current_stage if run is not None else 1
         cleared_stages = (
@@ -152,9 +160,21 @@ class GameService:
             if run_status in {"active", "failed", "forfeited", "completed", "expired"}
             else "available"
         )
-        preset = sorted(public_presets(), key=lambda item: item.order)[
-            current_stage - 1
-        ]
+        pinned_preset_key = next(
+            (
+                puzzle.preset_key
+                for puzzle in current_puzzles
+                if puzzle.stage_index == current_stage
+            ),
+            None,
+        )
+        preset = (
+            get_preset(pinned_preset_key)
+            if pinned_preset_key is not None
+            else sorted(public_presets(), key=lambda item: item.order)[
+                current_stage - 1
+            ]
+        )
         return BootstrapResponse(
             config=self.config,
             daily=DailyInfo(
@@ -385,6 +405,7 @@ class GameService:
             timer_duration=self.settings.fixed_timer_duration,
             blackout_roll=self.settings.fixed_blackout_roll,
             blackout_attempt=self.settings.fixed_blackout_attempt,
+            reverse_roll=self.settings.fixed_reverse_entry_roll,
             timer_enabled=self.settings.guess_timer_enabled,
             reverse_enabled=self.settings.reverse_entry_enabled,
             blackout_enabled=self.settings.blackout_enabled,
@@ -453,6 +474,7 @@ class GameService:
             seed=seed,
             created_at=now,
             game_id=game.game_id,
+            strategy_version=5 if blueprint.schema_version >= 6 else 4,
         )
 
     def _get_schedules(
@@ -650,9 +672,12 @@ class GameService:
         display_feedback: str,
         attempt: int,
         fallback_probability: float,
+        fallback_attempt: int | None = None,
     ) -> str | None:
         if display_feedback.count("B") >= 4:
             return "lowInformation"
+        if fallback_attempt is not None and attempt + 1 == fallback_attempt:
+            return "chance"
         if self.settings.fixed_reverse_entry_roll is not None:
             roll = self.settings.fixed_reverse_entry_roll
         else:
@@ -663,6 +688,67 @@ class GameService:
             ).digest()
             roll = int.from_bytes(digest[:8], "big") / 2**64
         return "chance" if roll < fallback_probability else None
+
+    @staticmethod
+    def _scheduled_punishment_updates(
+        blueprint: GameBlueprint | None,
+        trigger_attempt: int,
+        status: str,
+    ) -> list[PunishmentUpdate]:
+        if blueprint is None or status != "playing":
+            return []
+        updates: list[PunishmentUpdate] = []
+        for plan in blueprint.punishments_for_trigger(trigger_attempt):
+            if plan.kind not in {
+                "blindEntry", "corruptedHistory", "noRevision",
+                "forcedCommitment", "memoryTax",
+            }:
+                continue
+            updates.append(
+                PunishmentUpdate(
+                    kind=plan.kind,
+                    state="activated",
+                    effective_attempt=plan.effective_attempt,
+                    row_attempt=(
+                        int(plan.config["rowAttempt"])
+                        if "rowAttempt" in plan.config else None
+                    ),
+                    retain_rows=(
+                        int(plan.config["retainRows"])
+                        if "retainRows" in plan.config else None
+                    ),
+                )
+            )
+        return updates
+
+    @staticmethod
+    def _terminal_punishment_report(
+        blueprint: GameBlueprint | None,
+        status: str,
+        final_attempt: int,
+    ) -> PunishmentReport | None:
+        if blueprint is None or status == "playing" or not blueprint.punishment_plans:
+            return None
+        events: list[PunishmentReportEvent] = []
+        for plan in blueprint.punishment_plans:
+            if plan.trigger_attempt > final_attempt:
+                outcome = "notReached"
+            elif status == "won" and plan.trigger_attempt == final_attempt:
+                outcome = "superseded"
+            elif plan.effective_attempt > final_attempt:
+                outcome = "notReached"
+            else:
+                outcome = "activated"
+            events.append(
+                PunishmentReportEvent(
+                    kind=plan.kind,
+                    ordinal=plan.ordinal,
+                    trigger_attempt=plan.trigger_attempt,
+                    effective_attempt=plan.effective_attempt,
+                    outcome=outcome,
+                )
+            )
+        return PunishmentReport(events=events)
 
     @staticmethod
     def _deception_reveal(
@@ -900,6 +986,83 @@ class GameService:
             ]
         )
 
+    def _resolve_reverse_entry_for_consumed_attempt(
+        self,
+        connection,
+        game: StoredGame,
+        blueprint: GameBlueprint | None,
+        attempt: int,
+        status: str,
+        now: datetime,
+    ) -> tuple[ReverseEntryState | None, ReverseEntryUpdate | None]:
+        """Consume the Reverse event used by an accepted or expired attempt.
+
+        A separately planned Reverse event may begin on the next attempt. That
+        is reported as ``continued`` even though the event that affected this
+        attempt was consumed first; an ordinary rearm never leaks the same
+        event into another row.
+        """
+        state = self.repository.get_reverse_entry_state(
+            connection, game.game_id
+        )
+        if state is None or state.status != "active":
+            return state, None
+
+        can_rearm = state.event_count < state.max_events and status == "playing"
+        self.repository.consume_reverse_entry(
+            connection,
+            game.game_id,
+            attempt,
+            now,
+            rearm=can_rearm,
+        )
+        update = ReverseEntryUpdate(state="resolved")
+        state = self.repository.get_reverse_entry_state(
+            connection, game.game_id
+        )
+
+        if can_rearm and state is not None and state.status == "armed":
+            next_scheduled_attempt = (
+                next(
+                    (
+                        plan.effective_attempt
+                        for plan in blueprint.punishment_plans
+                        if plan.kind == "reverseEntry"
+                        and plan.ordinal == state.event_count + 1
+                    ),
+                    None,
+                )
+                if blueprint is not None
+                else None
+            )
+            if next_scheduled_attempt == attempt + 1:
+                self.repository.activate_reverse_entry(
+                    connection,
+                    game.game_id,
+                    attempt,
+                    "chance",
+                    now,
+                )
+                state = self.repository.get_reverse_entry_state(
+                    connection, game.game_id
+                )
+                update = ReverseEntryUpdate(state="continued")
+
+        return state, update
+
+    def _replayed_timeout_reverse_entry_update(
+        self,
+        connection,
+        game_id: str,
+        attempt: int,
+    ) -> ReverseEntryUpdate | None:
+        state = self.repository.get_reverse_entry_state(connection, game_id)
+        if state is None or state.consumed_attempt != attempt:
+            return None
+        if state.status == "active" and state.trigger_attempt == attempt:
+            return ReverseEntryUpdate(state="continued")
+        return ReverseEntryUpdate(state="resolved")
+
     def _consume_timer_timeout(
         self,
         connection,
@@ -909,6 +1072,10 @@ class GameService:
         now: datetime,
     ) -> TimedOutResponse:
         attempt = game.guess_count + 1
+        blueprint = (
+            GameBlueprint.from_json(game.blueprint_json)
+            if game.blueprint_json else None
+        )
         if (
             timer_state.status != "active"
             or timer_state.scheduled_attempt != attempt
@@ -935,6 +1102,16 @@ class GameService:
             attempt,
             now,
         )
+        _, reverse_entry_update = (
+            self._resolve_reverse_entry_for_consumed_attempt(
+                connection,
+                game,
+                blueprint,
+                attempt,
+                status,
+                now,
+            )
+        )
         next_timer = None
         if status == "playing":
             scheduled_next = self.repository.get_guess_timer_for_attempt(
@@ -951,13 +1128,29 @@ class GameService:
             status,
             attempt,
         )
+        punishment_updates = self._scheduled_punishment_updates(
+            blueprint, attempt, status
+        )
+        if reverse_entry_update is not None:
+            punishment_updates.append(
+                PunishmentUpdate(
+                    kind="reverseEntry",
+                    state=reverse_entry_update.state,
+                    effective_attempt=min(attempt + 1, MAX_GUESSES),
+                )
+            )
         return TimedOutResponse(
             attempt=attempt,
             status=status,
             answer=game.answer if status == "lost" else None,
             deception=deception,
+            reverse_entry=reverse_entry_update,
             timer=ExpiredGuessTimer(state="expired"),
             next_timer=next_timer,
+            punishments=punishment_updates or None,
+            punishment_report=self._terminal_punishment_report(
+                blueprint, status, attempt
+            ),
         )
 
     def expire_timer(
@@ -1015,13 +1208,34 @@ class GameService:
                     game.status,
                     game.guess_count,
                 )
+                reverse_entry_update = (
+                    self._replayed_timeout_reverse_entry_update(
+                        connection,
+                        game.game_id,
+                        timer_state.resolved_attempt,
+                    )
+                )
+                punishment_updates = []
+                if reverse_entry_update is not None:
+                    punishment_updates.append(
+                        PunishmentUpdate(
+                            kind="reverseEntry",
+                            state=reverse_entry_update.state,
+                            effective_attempt=min(
+                                timer_state.resolved_attempt + 1,
+                                MAX_GUESSES,
+                            ),
+                        )
+                    )
                 return TimedOutResponse(
                     attempt=timer_state.resolved_attempt,
                     status=game.status,
                     answer=game.answer if game.status == "lost" else None,
                     deception=deception,
+                    reverse_entry=reverse_entry_update,
                     timer=ExpiredGuessTimer(state="expired"),
                     next_timer=None,
+                    punishments=punishment_updates or None,
                 )
             if game.status != "playing":
                 raise DomainError(
@@ -1139,9 +1353,94 @@ class GameService:
             submitted_guess = normalize_word(raw_guess)
             if reverse_entry_active:
                 submitted_guess = submitted_guess[::-1]
+            effective_punishments = (
+                blueprint.punishments_for_effective(attempt)
+                if blueprint is not None else ()
+            )
+            forced_commitment_active = any(
+                plan.kind == "forcedCommitment"
+                and plan.effective_attempt == attempt
+                for plan in effective_punishments
+            )
             try:
                 guess = self.engine.validate_guess(submitted_guess)
             except GuessValidationError as error:
+                if (
+                    forced_commitment_active
+                    and error.code == "INVALID_WORD"
+                    and len(submitted_guess) == WORD_LENGTH
+                ):
+                    if game.mode == "daily":
+                        self._daily_stage_access(
+                            connection, game, continuation_token, now,
+                            bind_if_ready=True,
+                        )
+                    status = "lost" if attempt >= MAX_GUESSES else "playing"
+                    self.repository.record_timeout(
+                        connection, game_id, attempt, status, now
+                    )
+                    self._finish_daily_stage(connection, game, status, now)
+                    if timer_active and timer_state is not None:
+                        self.repository.resolve_guess_timer(
+                            connection, game_id, timer_state.ordinal,
+                            "completed", attempt, now,
+                        )
+                    reverse_entry_update = None
+                    if reverse_entry_active:
+                        _, reverse_entry_update = (
+                            self._resolve_reverse_entry_for_consumed_attempt(
+                                connection,
+                                game,
+                                blueprint,
+                                attempt,
+                                status,
+                                now,
+                            )
+                        )
+                    next_timer = None
+                    if status == "playing":
+                        scheduled_next = next(
+                            (
+                                state
+                                for state in timer_states
+                                if state.status == "scheduled"
+                                and state.scheduled_attempt == attempt + 1
+                            ),
+                            None,
+                        )
+                        if scheduled_next is not None:
+                            next_timer = self._activate_guess_timer(
+                                connection, scheduled_next, self.now()
+                            )
+                    deception = self._terminal_deception(
+                        connection, game_id, schedules, status, attempt
+                    )
+                    punishment_updates = self._scheduled_punishment_updates(
+                        blueprint, attempt, status
+                    )
+                    if reverse_entry_update is not None:
+                        punishment_updates.append(
+                            PunishmentUpdate(
+                                kind="reverseEntry",
+                                state=reverse_entry_update.state,
+                                effective_attempt=min(
+                                    attempt + 1, MAX_GUESSES
+                                ),
+                            )
+                        )
+                    return InvalidCommitmentResponse(
+                        attempted_guess=submitted_guess,
+                        attempt=attempt,
+                        status=status,
+                        answer=game.answer if status == "lost" else None,
+                        deception=deception,
+                        reverse_entry=reverse_entry_update,
+                        next_timer=next_timer,
+                        punishments=punishment_updates or None,
+                        punishment_report=self._terminal_punishment_report(
+                            blueprint, status, attempt
+                        ),
+                    )
                 if reverse_entry_active and error.code == "INVALID_WORD":
                     raise DomainError(
                         400,
@@ -1162,6 +1461,7 @@ class GameService:
             truth_feedback = self.engine.evaluate(guess, game.answer)
             display_feedback = truth_feedback
             deception_reason: StoredDeceptionReason = "not_scheduled"
+            deception_diagnostics_json: str | None = None
             prior_guesses = self.repository.list_guesses(
                 connection, game_id
             )
@@ -1213,6 +1513,7 @@ class GameService:
                         f"decision:v2:{schedule.ordinal}".encode("utf-8"),
                         hashlib.sha256,
                     ).hexdigest()
+                preset = get_preset(game.preset_key)
                 decision = self.deception_engine.choose_feedback(
                     guess=guess,
                     real_answer=game.answer,
@@ -1234,10 +1535,22 @@ class GameService:
                         if blueprint is not None
                         else 1
                     ),
+                    credible_lie_row_cap=(
+                        preset.lie_policy.credible_lie_row_cap
+                    ),
+                    repeat_thread_probability=(
+                        preset.lie_policy.repeat_thread_probability
+                    ),
+                    belief_aware=schedule.strategy_version >= 5,
                     time_budget_ms=self.settings.deception_decision_budget_ms,
                 )
                 display_feedback = decision.feedback
                 deception_reason = decision.reason
+                deception_diagnostics_json = json.dumps(
+                    decision.diagnostics(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
                 if is_correct and decision.activated:
                     status = "playing"
             elif schedule is not None and attempt >= MAX_GUESSES:
@@ -1253,6 +1566,7 @@ class GameService:
                 truth_feedback,
                 display_feedback,
                 deception_reason,
+                deception_diagnostics_json,
                 status,
                 now,
             )
@@ -1305,24 +1619,24 @@ class GameService:
             )
             reverse_entry_update = None
             if reverse_entry_active:
-                can_rearm = (
-                    reverse_entry_state is not None
-                    and reverse_entry_state.event_count
-                    < reverse_entry_state.max_events
-                    and status == "playing"
-                )
-                self.repository.consume_reverse_entry(
-                    connection, game_id, attempt, now, rearm=can_rearm
-                )
-                reverse_entry_update = ReverseEntryUpdate(state="resolved")
-                reverse_entry_state = self.repository.get_reverse_entry_state(
-                    connection, game_id
+                reverse_entry_state, reverse_entry_update = (
+                    self._resolve_reverse_entry_for_consumed_attempt(
+                        connection,
+                        game,
+                        blueprint,
+                        attempt,
+                        status,
+                        now,
+                    )
                 )
             combination_policy = get_preset(game.preset_key).combination_policy
             reverse_can_overlap = combination_policy != "none"
             if (
                 reverse_entry_state is not None
                 and reverse_entry_state.status == "armed"
+                # The consumed event cannot re-arm itself from the same guess.
+                # A separately scheduled adjacent event is activated above.
+                and not reverse_entry_active
                 and status == "playing"
                 and (reverse_can_overlap or not timer_targets_next_attempt)
                 and (
@@ -1338,6 +1652,19 @@ class GameService:
                         blueprint.reverse_fallback_probability
                         if blueprint is not None
                         else 0.10
+                    ),
+                    (
+                        next(
+                            (
+                                plan.effective_attempt
+                                for plan in blueprint.punishment_plans
+                                if plan.kind == "reverseEntry"
+                                and plan.ordinal
+                                == reverse_entry_state.event_count + 1
+                            ),
+                            None,
+                        )
+                        if blueprint is not None else None
                     ),
                 )
                 if trigger_reason is not None:
@@ -1370,6 +1697,17 @@ class GameService:
                 attempt,
             )
 
+        punishment_updates = self._scheduled_punishment_updates(
+            blueprint, attempt, status
+        )
+        if reverse_entry_update is not None:
+            punishment_updates.append(
+                PunishmentUpdate(
+                    kind="reverseEntry",
+                    state=reverse_entry_update.state,
+                    effective_attempt=min(attempt + 1, 6),
+                )
+            )
         return GuessResponse(
             guess=guess,
             feedback=display_feedback,
@@ -1381,4 +1719,8 @@ class GameService:
             timer=timer_update,
             blackout=blackout_update,
             intrusion=intrusion_update,
+            punishments=punishment_updates or None,
+            punishment_report=self._terminal_punishment_report(
+                blueprint, status, attempt
+            ),
         )

@@ -5,9 +5,12 @@ import type {
   BootstrapResponse,
   GameMode,
   GuessResponse,
+  InvalidCommitmentResponse,
+  PunishmentKind,
   StartGameResponse,
+  TimedOutResponse,
 } from "../api/types";
-import { isTimedOut } from "../api/types";
+import { isInvalidCommitment, isTimedOut } from "../api/types";
 
 export type AppPhase =
   | "booting"
@@ -45,6 +48,13 @@ export type AppState = {
   pendingTimer: ActivatedGuessTimer | null;
   blackoutCutoffAttempt: number | null;
   intrusionActive: ActivatedIntrusion | null;
+  activeInputPunishment: Extract<
+    PunishmentKind,
+    "blindEntry" | "noRevision" | "forcedCommitment"
+  > | null;
+  corruptedRowAttempt: number | null;
+  memoryTaxActive: boolean;
+  memoryTaxRetainRows: number;
   announcement: string;
 };
 
@@ -63,7 +73,7 @@ export type Action =
       enteredGuess: string;
     }
   | { type: "TIMER_EXPIRING" }
-  | { type: "TIMEOUT_SUCCESS"; payload: AttemptResponse }
+  | { type: "TIMEOUT_SUCCESS"; payload: TimedOutResponse }
   | { type: "REVERSE_COMPLETE" }
   | { type: "REVEAL_COMPLETE" }
   | { type: "BLACKOUT_COVERED" }
@@ -74,6 +84,7 @@ export type Action =
       scope: ErrorScope;
       message: string;
       recoverable?: boolean;
+      code?: string;
     };
 
 export const initialState: AppState = {
@@ -91,23 +102,57 @@ export const initialState: AppState = {
   pendingTimer: null,
   blackoutCutoffAttempt: null,
   intrusionActive: null,
+  activeInputPunishment: null,
+  corruptedRowAttempt: null,
+  memoryTaxActive: false,
+  memoryTaxRetainRows: 2,
   announcement: "",
 };
 
 function timeoutRevealState(
   state: AppState,
-  payload: AttemptResponse,
+  payload: TimedOutResponse | InvalidCommitmentResponse,
 ): AppState {
   return {
     ...state,
     phase: "revealing",
     guesses: [...state.guesses, payload],
     currentGuess: "",
-    message: "Time expired.",
+    message: isInvalidCommitment(payload)
+      ? "Guess rejected. Attempt consumed."
+      : "",
     errorScope: null,
+    reverseEntryActive: payload.reverseEntry?.state === "continued",
     timerActive: null,
-    pendingTimer: isTimedOut(payload) ? (payload.nextTimer ?? null) : null,
-    announcement: `Time expired. Guess ${payload.attempt} was consumed.`,
+    pendingTimer: payload.nextTimer ?? null,
+    announcement: isInvalidCommitment(payload)
+      ? `Guess ${payload.attempt} was rejected and consumed.`
+      : `Time expired. Guess ${payload.attempt} was consumed.`,
+  };
+}
+
+function nextPunishmentState(state: AppState, latest: AttemptResponse) {
+  const updates = latest.punishments ?? [];
+  const nextAttempt = latest.attempt + 1;
+  const input = updates.find(
+    (update) =>
+      update.state === "activated" &&
+      update.effectiveAttempt === nextAttempt &&
+      ["blindEntry", "noRevision", "forcedCommitment"].includes(update.kind),
+  );
+  const corrupted = updates.find(
+    (update) =>
+      update.kind === "corruptedHistory" && update.state === "activated",
+  );
+  const memory = updates.find(
+    (update) => update.kind === "memoryTax" && update.state === "activated",
+  );
+  return {
+    activeInputPunishment: (input?.kind ??
+      null) as AppState["activeInputPunishment"],
+    corruptedRowAttempt: corrupted?.rowAttempt ?? null,
+    memoryTaxActive: state.memoryTaxActive || Boolean(memory),
+    memoryTaxRetainRows: memory?.retainRows ?? state.memoryTaxRetainRows,
   };
 }
 
@@ -148,27 +193,53 @@ export function reducer(state: AppState, action: Action): AppState {
         pendingTimer: null,
         blackoutCutoffAttempt: null,
         intrusionActive: null,
+        activeInputPunishment: null,
+        corruptedRowAttempt: null,
+        memoryTaxActive: false,
+        memoryTaxRetainRows: 2,
         announcement: "",
       };
-    case "TYPE_LETTER":
+    case "TYPE_LETTER": {
       if (state.phase !== "ready" || !state.session) return state;
       if (state.currentGuess.length >= state.session.config.wordLength) {
         return state;
       }
+      const typedGuess = state.currentGuess + action.letter.toLowerCase();
       return {
         ...state,
-        currentGuess: state.currentGuess + action.letter.toLowerCase(),
+        currentGuess: typedGuess,
         message: "",
         errorScope: null,
+        announcement:
+          state.activeInputPunishment === "blindEntry"
+            ? `${typedGuess.length} of ${state.session.config.wordLength} letters entered.`
+            : state.announcement,
       };
-    case "BACKSPACE":
+    }
+    case "BACKSPACE": {
       if (state.phase !== "ready") return state;
+      if (
+        state.activeInputPunishment === "noRevision" &&
+        state.currentGuess.length > 0
+      ) {
+        return {
+          ...state,
+          message: "Revision is locked.",
+          announcement: "Backspace is unavailable for this guess.",
+        };
+      }
+      const shortenedGuess = state.currentGuess.slice(0, -1);
       return {
         ...state,
-        currentGuess: state.currentGuess.slice(0, -1),
+        currentGuess: shortenedGuess,
         message: "",
         errorScope: null,
+        announcement:
+          state.activeInputPunishment === "blindEntry" && state.session
+            ? `${shortenedGuess.length} of ${state.session.config.wordLength} letters entered.`
+            : state.announcement,
       };
+    }
     case "LOCAL_MESSAGE":
       return {
         ...state,
@@ -187,11 +258,14 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         phase: "expiring",
-        message: "Time expired.",
+        message: "",
         errorScope: null,
       };
     case "GUESS_SUCCESS":
       if (isTimedOut(action.payload)) {
+        return timeoutRevealState(state, action.payload);
+      }
+      if (isInvalidCommitment(action.payload)) {
         return timeoutRevealState(state, action.payload);
       }
       if (
@@ -259,6 +333,9 @@ export function reducer(state: AppState, action: Action): AppState {
           timerActive: null,
           pendingTimer: null,
           blackoutCutoffAttempt: null,
+          corruptedRowAttempt: null,
+          memoryTaxActive: false,
+          activeInputPunishment: null,
         };
       }
       if (latest.status === "lost") {
@@ -269,9 +346,16 @@ export function reducer(state: AppState, action: Action): AppState {
           timerActive: null,
           pendingTimer: null,
           blackoutCutoffAttempt: null,
+          corruptedRowAttempt: null,
+          memoryTaxActive: false,
+          activeInputPunishment: null,
         };
       }
-      if (isTimedOut(latest) && state.intrusionActive) {
+      const punishmentState = nextPunishmentState(state, latest);
+      if (
+        (isTimedOut(latest) || isInvalidCommitment(latest)) &&
+        state.intrusionActive
+      ) {
         return {
           ...state,
           phase: "intrusion",
@@ -280,9 +364,14 @@ export function reducer(state: AppState, action: Action): AppState {
           pendingTimer: null,
           announcement:
             "Intrusion remains active. Dismiss it before continuing.",
+          ...punishmentState,
         };
       }
-      if (!isTimedOut(latest) && latest.blackout?.state === "activated") {
+      if (
+        !isTimedOut(latest) &&
+        !isInvalidCommitment(latest) &&
+        latest.blackout?.state === "activated"
+      ) {
         return {
           ...state,
           phase: "blackoutClosing",
@@ -290,15 +379,21 @@ export function reducer(state: AppState, action: Action): AppState {
           reverseEntryActive: false,
           timerActive: null,
           pendingTimer: state.pendingTimer,
+          ...punishmentState,
         };
       }
       const reverseEntryActive =
         !isTimedOut(latest) &&
+        !isInvalidCommitment(latest) &&
         (latest.reverseEntry?.state === "activated" ||
           latest.reverseEntry?.state === "continued")
           ? true
           : state.reverseEntryActive;
-      if (!isTimedOut(latest) && latest.intrusion?.state === "activated") {
+      if (
+        !isTimedOut(latest) &&
+        !isInvalidCommitment(latest) &&
+        latest.intrusion?.state === "activated"
+      ) {
         return {
           ...state,
           phase: "intrusion",
@@ -309,6 +404,7 @@ export function reducer(state: AppState, action: Action): AppState {
           intrusionActive: latest.intrusion,
           announcement:
             "Intrusion. Dismiss the interruption before continuing.",
+          ...punishmentState,
         };
       }
       return {
@@ -318,11 +414,17 @@ export function reducer(state: AppState, action: Action): AppState {
         reverseEntryActive,
         timerActive: state.pendingTimer,
         pendingTimer: null,
+        ...punishmentState,
       };
     }
     case "BLACKOUT_COVERED": {
       const latest = state.guesses.at(-1);
-      if (state.phase !== "blackoutClosing" || !latest || isTimedOut(latest)) {
+      if (
+        state.phase !== "blackoutClosing" ||
+        !latest ||
+        isTimedOut(latest) ||
+        isInvalidCommitment(latest)
+      ) {
         return state;
       }
       return {
@@ -338,12 +440,14 @@ export function reducer(state: AppState, action: Action): AppState {
       const reverseEntryActive = Boolean(
         latest &&
           !isTimedOut(latest) &&
+          !isInvalidCommitment(latest) &&
           (latest.reverseEntry?.state === "activated" ||
             latest.reverseEntry?.state === "continued"),
       );
       if (
         latest &&
         !isTimedOut(latest) &&
+        !isInvalidCommitment(latest) &&
         latest.intrusion?.state === "activated"
       ) {
         return {
@@ -377,10 +481,16 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "FAILURE":
       if (action.scope === "guess" && action.recoverable !== true) {
+        const clearNoRevision =
+          state.activeInputPunishment === "noRevision" &&
+          action.code === "INVALID_WORD";
         return {
           ...state,
           phase: "ready",
-          message: action.message,
+          currentGuess: clearNoRevision ? "" : state.currentGuess,
+          message: clearNoRevision
+            ? "That guess isn’t accepted."
+            : action.message,
           errorScope: action.scope,
         };
       }

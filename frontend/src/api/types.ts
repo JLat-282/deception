@@ -88,6 +88,41 @@ export type ActivatedIntrusion = {
   placement: IntrusionPlacement;
 };
 
+export type PunishmentKind =
+  | "timer"
+  | "reverseEntry"
+  | "blackout"
+  | "intrusion"
+  | "blindEntry"
+  | "corruptedHistory"
+  | "noRevision"
+  | "forcedCommitment"
+  | "memoryTax";
+
+export type PunishmentUpdate = {
+  kind: PunishmentKind;
+  state: "activated" | "resolved" | "continued" | "expired";
+  effectiveAttempt: number;
+  durationSeconds?: 10 | 30;
+  startsAt?: string;
+  deadlineAt?: string;
+  rowAttempt?: number;
+  retainRows?: number;
+  placement?: IntrusionPlacement;
+};
+
+export type PunishmentReportEvent = {
+  kind: PunishmentKind;
+  ordinal: number;
+  triggerAttempt: number;
+  effectiveAttempt: number;
+  outcome: "activated" | "missed" | "superseded" | "notReached";
+};
+
+export type PunishmentReport = {
+  events: PunishmentReportEvent[];
+};
+
 export type GuessResponse = {
   guess: string;
   feedback: string;
@@ -101,6 +136,8 @@ export type GuessResponse = {
   timer?: ActivatedGuessTimer | { state: "completed" };
   blackout?: { state: "activated" };
   intrusion?: ActivatedIntrusion;
+  punishments?: PunishmentUpdate[];
+  punishmentReport?: PunishmentReport;
 };
 
 export type TimedOutResponse = {
@@ -109,16 +146,46 @@ export type TimedOutResponse = {
   status: GameStatus;
   answer?: string;
   deception?: DeceptionReveal;
+  reverseEntry?: {
+    state: "resolved" | "continued";
+  };
   timer: { state: "expired" };
   nextTimer?: ActivatedGuessTimer;
+  punishments?: PunishmentUpdate[];
+  punishmentReport?: PunishmentReport;
 };
 
-export type AttemptResponse = GuessResponse | TimedOutResponse;
+export type InvalidCommitmentResponse = {
+  consumed: true;
+  reason: "invalidCommitment";
+  attemptedGuess: string;
+  attempt: number;
+  status: GameStatus;
+  answer?: string;
+  deception?: DeceptionReveal;
+  reverseEntry?: {
+    state: "resolved" | "continued";
+  };
+  nextTimer?: ActivatedGuessTimer;
+  punishments?: PunishmentUpdate[];
+  punishmentReport?: PunishmentReport;
+};
+
+export type AttemptResponse =
+  | GuessResponse
+  | TimedOutResponse
+  | InvalidCommitmentResponse;
 
 export function isTimedOut(
   result: AttemptResponse,
 ): result is TimedOutResponse {
   return "timedOut" in result;
+}
+
+export function isInvalidCommitment(
+  result: AttemptResponse,
+): result is InvalidCommitmentResponse {
+  return "reason" in result && result.reason === "invalidCommitment";
 }
 
 export type ErrorResponse = {

@@ -19,6 +19,7 @@ type KeyboardProps = {
   onLetter: (letter: string) => void;
   onEnter: () => void;
   onBackspace: () => void;
+  backspaceLocked?: boolean;
 };
 
 function LetterKey({
@@ -53,6 +54,7 @@ export function Keyboard({
   onLetter,
   onEnter,
   onBackspace,
+  backspaceLocked = false,
 }: KeyboardProps) {
   return (
     <fieldset className="keyboard" aria-label="On-screen keyboard">
@@ -97,10 +99,10 @@ export function Keyboard({
           />
         ))}
         <button
-          className="key key--wide"
+          className={`key key--wide ${backspaceLocked ? "key--locked" : ""}`}
           type="button"
           aria-label="Backspace"
-          disabled={disabled}
+          disabled={disabled || backspaceLocked}
           onClick={onBackspace}
         >
           <svg aria-hidden="true" viewBox="0 0 32 24" width="28" height="22">

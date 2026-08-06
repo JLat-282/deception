@@ -27,3 +27,4 @@ supabase/.temp/
 *.sqlite
 *.sqlite3
 .gstack/
+.playwright-cli/

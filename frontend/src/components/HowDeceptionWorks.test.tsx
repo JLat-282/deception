@@ -7,27 +7,44 @@ describe("HowDeceptionWorks", () => {
     render(<HowDeceptionWorks expandAll onClose={vi.fn()} />);
 
     expect(
-      screen.getByRole("heading", { name: "Deception Guide" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Only feedback can lie/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Letters never change or move/),
+      screen.getByRole("heading", { name: "How Deception Works" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Feedback may lie more than once/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/one or two tiles/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/correct answer can also be rejected/),
+      screen.getByText(/The letter is in the correct spot/),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Difficulties" }),
+      screen.getByText(/The letter is in the word but belongs somewhere else/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/The letter is not in the word/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/letters you enter never change or move/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/This can happen more than once/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/wrong color on one or two tiles/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/early correct answer may be marked wrong once/),
+    ).toHaveLength(2);
+    expect(
+      screen.getByRole("heading", { name: "Difficulty levels" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Possible punishments")).toBeInTheDocument();
     expect(screen.getByText("Reverse Entry")).toBeInTheDocument();
     expect(screen.getByText("Guess Timer")).toBeInTheDocument();
     expect(screen.getByText("Blackout")).toBeInTheDocument();
     expect(screen.getByText("Intrusion")).toBeInTheDocument();
+    expect(screen.getByText("Blind Entry")).toBeInTheDocument();
+    expect(screen.getByText("Corrupted History")).toBeInTheDocument();
+    expect(screen.getByText("Forced Commitment")).toBeInTheDocument();
+    expect(screen.getByText("No Revision")).toBeInTheDocument();
+    expect(screen.getByText("Memory Tax")).toBeInTheDocument();
+    expect(screen.getByText(/either 30 or 10 seconds/)).toBeInTheDocument();
+    expect(screen.getByText(/moving Dismiss button/)).toBeInTheDocument();
     expect(screen.queryByText(/80%|20%/)).not.toBeInTheDocument();
     expect(
       screen.queryByText(

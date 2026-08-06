@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from time import perf_counter, sleep
 
-from backend.app.deception import DeceptionEngine, VisibleGuess
+from backend.app.deception import DeceptionEngine, VisibleGuess, _Candidate
 from backend.app.engine import TruthEngine, load_word_list
 
 
@@ -61,8 +61,7 @@ def test_fabricated_feedback_changes_exactly_one_tile() -> None:
     assert changed_indexes(truth, decision.feedback) == [
         decision.tile_index
     ]
-    assert decision.feedback[decision.tile_index] in {"G", "Y"}
-    assert truth[decision.tile_index] == "B"
+    assert decision.feedback[decision.tile_index] != truth[decision.tile_index]
     assert decision.feedback != "GGGGG"
 
 
@@ -112,11 +111,19 @@ def test_deadline_uses_a_plausible_candidate_already_found(monkeypatch) -> None:
         answers=("outre", "store", "crane"),
     )
     deception = DeceptionEngine(truth_engine)
-    checks = iter((False, False, True))
+    partial = _Candidate(
+        feedback="BYBGG",
+        tile_indexes=(0, 1),
+        tactic="hide",
+        credible_worlds=1,
+        credible_weight=0.5,
+        exact_decoys=0,
+        score=2.0,
+    )
     monkeypatch.setattr(
         deception,
-        "_budget_expired",
-        lambda _deadline: next(checks, True),
+        "_belief_candidates",
+        lambda **_kwargs: ([partial], True),
     )
     truth = truth_engine.evaluate("stare", "store")
 
@@ -134,6 +141,7 @@ def test_deadline_uses_a_plausible_candidate_already_found(monkeypatch) -> None:
     assert decision.feedback == "BYBGG"
     assert decision.tile_indexes == (0, 1)
     assert decision.reason == "activated"
+    assert decision.deadline_hit is True
 
 
 def test_stare_store_first_row_regression_uses_scheduled_lie() -> None:
@@ -156,8 +164,8 @@ def test_stare_store_first_row_regression_uses_scheduled_lie() -> None:
     )
 
     assert truth == "GGBGG"
-    assert decision.feedback == "BYBGG"
-    assert decision.tile_indexes == (0, 1)
+    assert decision.feedback != truth
+    assert len(decision.tile_indexes) == 2
     assert decision.reason == "activated"
 
 
@@ -308,10 +316,89 @@ def test_picky_can_lie_after_stare_and_cloud_against_gnash() -> None:
 
     assert truth == "BBBBB"
     assert decision.tile_index is not None
-    assert decision.feedback[decision.tile_index] == "Y"
+    assert decision.feedback[decision.tile_index] in {"G", "Y"}
     assert "picky"[decision.tile_index] not in {
         letter for row in history for letter in row.guess
     }
+
+
+def test_strong_first_guess_can_lie_without_an_exact_decoy() -> None:
+    truth_engine = TruthEngine(
+        valid_guesses=("staez", "stare", "plane"),
+        answers=("stare", "plane"),
+    )
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("staez", "stare")
+
+    decision = deception.choose_feedback(
+        guess="staez",
+        real_answer="stare",
+        truth_feedback=truth,
+        prior_history=(),
+        seed="wide-first-row",
+        max_false_tiles=1,
+        time_budget_ms=None,
+    )
+
+    assert truth == "GGGYB"
+    assert decision.activated
+    assert decision.strategy == "belief_world"
+    assert decision.exact_decoys == 0
+    assert decision.credible_worlds >= 1
+    assert len(changed_indexes(truth, decision.feedback)) == 1
+
+
+def test_late_unsupported_rare_letter_probe_can_stay_truthful() -> None:
+    truth_engine = TruthEngine(
+        valid_guesses=("crane", "slate", "stare", "zippy"),
+        answers=("crane", "slate", "stare"),
+    )
+    deception = DeceptionEngine(truth_engine)
+    truth = truth_engine.evaluate("zippy", "crane")
+    prior = tuple(
+        VisibleGuess("slate", truth_engine.evaluate("slate", "crane"))
+        for _ in range(3)
+    )
+
+    decision = deception.choose_feedback(
+        guess="zippy",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=prior,
+        seed="late-rare-probe",
+        max_false_tiles=1,
+        time_budget_ms=None,
+    )
+
+    assert truth == "BBBBB"
+    assert decision.feedback == truth
+    assert decision.reason == "no_candidate"
+
+
+def test_repeat_thread_can_reuse_a_previously_lied_about_letter() -> None:
+    truth_engine = TruthEngine(
+        valid_guesses=("crane", "slate", "stare"),
+        answers=("crane",),
+    )
+    deception = DeceptionEngine(truth_engine)
+    prior_truth = truth_engine.evaluate("slate", "crane")
+    prior_lie = prior_truth[:3] + "Y" + prior_truth[4:]
+    truth = truth_engine.evaluate("stare", "crane")
+
+    decision = deception.choose_feedback(
+        guess="stare",
+        real_answer="crane",
+        truth_feedback=truth,
+        prior_history=(VisibleGuess("slate", prior_lie),),
+        seed="repeat-thread",
+        excluded_tile_indexes={0, 2, 3, 4},
+        repeat_thread_probability=1.0,
+        time_budget_ms=None,
+    )
+
+    assert decision.activated
+    assert decision.tile_index == 1
+    assert decision.thread_letter == "t"
 
 
 def test_constraint_backed_lie_does_not_reuse_a_previously_guessed_letter(

@@ -1,5 +1,5 @@
 import type { AttemptResponse, FeedbackMarker } from "../api/types";
-import { isTimedOut } from "../api/types";
+import { isInvalidCommitment, isTimedOut } from "../api/types";
 
 const STATE_LABEL: Record<FeedbackMarker, string> = {
   G: "correct position",
@@ -14,6 +14,10 @@ type GameBoardProps = {
   guesses: AttemptResponse[];
   revealing: boolean;
   blackoutCutoffAttempt?: number | null;
+  corruptedRowAttempt?: number | null;
+  memoryTaxRetainRows?: number | null;
+  blindCurrentEntry?: boolean;
+  forcedCommitmentActive?: boolean;
   reverseTransition?: {
     enteredGuess: string;
     decodedGuess: string;
@@ -27,6 +31,10 @@ export function GameBoard({
   guesses,
   revealing,
   blackoutCutoffAttempt = null,
+  corruptedRowAttempt = null,
+  memoryTaxRetainRows = null,
+  blindCurrentEntry = false,
+  forcedCommitmentActive = false,
   reverseTransition = null,
 }: GameBoardProps) {
   const rows = Array.from({ length: maxGuesses }, (_, index) => ({
@@ -47,8 +55,22 @@ export function GameBoard({
       <tbody>
         {rows.map((row) => {
           const result = guesses[row.index];
-          const timedOut = result ? isTimedOut(result) : false;
-          const guessResult = result && !isTimedOut(result) ? result : null;
+          const timedOutResult = result && isTimedOut(result) ? result : null;
+          const invalidResult =
+            result && isInvalidCommitment(result) ? result : null;
+          const guessResult =
+            result && !isTimedOut(result) && !isInvalidCommitment(result)
+              ? result
+              : null;
+          const timedOut = timedOutResult !== null;
+          const invalidCommitment = invalidResult !== null;
+          const attemptNumber = result?.attempt ?? row.index + 1;
+          const isMemoryHidden =
+            result !== undefined &&
+            memoryTaxRetainRows !== null &&
+            attemptNumber <= guesses.length - memoryTaxRetainRows;
+          const isCorrupted =
+            result !== undefined && attemptNumber === corruptedRowAttempt;
           const isBlackedOut =
             guessResult !== null &&
             blackoutCutoffAttempt !== null &&
@@ -57,11 +79,13 @@ export function GameBoard({
           const isReversingRow = isCurrentRow && reverseTransition !== null;
           const letters =
             guessResult?.guess ??
-            (isReversingRow
-              ? reverseTransition.decodedGuess
-              : isCurrentRow
-                ? currentGuess
-                : "");
+            (invalidResult
+              ? invalidResult.attemptedGuess
+              : isReversingRow
+                ? reverseTransition.decodedGuess
+                : isCurrentRow
+                  ? currentGuess
+                  : "");
           const isRevealingRow =
             revealing && row.index === guesses.length - 1 && !timedOut;
 
@@ -71,14 +95,18 @@ export function GameBoard({
               key={row.key}
             >
               {columns.map((column) => {
-                const letter = letters[column.index]?.toUpperCase() ?? "";
+                const actualLetter = letters[column.index]?.toUpperCase() ?? "";
+                const concealCurrent = isCurrentRow && blindCurrentEntry;
+                const concealHistory = isMemoryHidden || isCorrupted;
+                const letter =
+                  concealCurrent || concealHistory ? "" : actualLetter;
                 const enteredLetter = isReversingRow
                   ? (reverseTransition.enteredGuess[
                       column.index
                     ]?.toUpperCase() ?? "")
                   : "";
                 const marker =
-                  guessResult && !isBlackedOut
+                  guessResult && !isBlackedOut && !concealHistory
                     ? (guessResult.feedback[column.index] as
                         | FeedbackMarker
                         | undefined)
@@ -90,17 +118,27 @@ export function GameBoard({
                   ? column.index === 0
                     ? `Row ${row.index + 1}, time expired`
                     : `Row ${row.index + 1}, position ${column.index + 1}, consumed by timer`
-                  : isBlackedOut
-                    ? `${letter}, previous feedback erased by Blackout`
-                    : marker
-                      ? `${letter}, ${STATE_LABEL[marker]}`
-                      : letter
-                        ? `${letter}, not submitted`
-                        : `Row ${row.index + 1}, position ${column.index + 1}, empty`;
+                  : invalidCommitment
+                    ? column.index === 0
+                      ? `Row ${row.index + 1}, guess rejected and consumed`
+                      : `Row ${row.index + 1}, no feedback`
+                    : isMemoryHidden
+                      ? `Row ${row.index + 1}, hidden by Memory Tax`
+                      : isCorrupted
+                        ? `Row ${row.index + 1}, history corrupted`
+                        : isBlackedOut
+                          ? `${letter}, previous feedback erased by Blackout`
+                          : marker
+                            ? `${letter}, ${STATE_LABEL[marker]}`
+                            : actualLetter
+                              ? concealCurrent
+                                ? `Position ${column.index + 1}, letter hidden during Blind Entry`
+                                : `${actualLetter}, not submitted`
+                              : `Row ${row.index + 1}, position ${column.index + 1}, empty`;
 
                 return (
                   <td
-                    className={`tile ${letter ? "tile--filled" : ""} ${stateClass} ${
+                    className={`tile ${actualLetter ? "tile--filled" : ""} ${stateClass} ${
                       isRevealingRow ? "tile--revealing" : ""
                     } ${isReversingRow ? "tile--reversing" : ""} ${
                       isReversingRow && column.index === 2
@@ -108,7 +146,13 @@ export function GameBoard({
                         : ""
                     } ${timedOut ? "tile--timed-out" : ""} ${
                       isBlackedOut ? "tile--blackout" : ""
-                    }`}
+                    } ${isCorrupted ? "tile--corrupted" : ""} ${
+                      isMemoryHidden ? "tile--memory-tax" : ""
+                    } ${concealCurrent && actualLetter ? "tile--blind-entry" : ""} ${
+                      isCurrentRow && forcedCommitmentActive
+                        ? "tile--forced-commitment"
+                        : ""
+                    } ${invalidCommitment ? "tile--invalid-commitment" : ""}`}
                     aria-label={label}
                     key={column.key}
                     style={
@@ -125,6 +169,8 @@ export function GameBoard({
                   >
                     {timedOut && column.index === 0 ? (
                       <span className="timeout-row-label">Time expired</span>
+                    ) : invalidCommitment && column.index === 0 ? (
+                      <span className="timeout-row-label">Guess rejected</span>
                     ) : isReversingRow ? (
                       <>
                         <span className="tile-letter tile-letter--reverse-from">

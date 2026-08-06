@@ -1,8 +1,95 @@
 # Design: Difficulty Presets and Daily Descent
 
+## Preset generation 3 (current)
+
+New games use the `@3` preset family and blueprint schema 6. Stored `@1` and
+`@2` games retain their persisted blueprint and lie-strategy version. A Daily
+Descent puzzle set is pinned for the entire reset window; a deployment cannot
+upgrade a run between stages.
+
+| Preset | Scheduled lie rows | Two-tile chance | Repeat-thread chance |
+|---|---:|---:|---:|
+| `doubt-1@3` | 1: 85%, 2: 15% | 0% | 4% |
+| `doubt-2@3` | 1: 20%, 2: 75%, 3: 5% | 0% | 10% |
+| `doubt-3@3` | 2: 25%, 3: 70%, 4: 5% | 35% per row | 22% |
+| `deception@3` | 3: 5%, 4: 40%, 5: 55% | 65% per row | 35% |
+
+Exact lie rows are uniformly selected without replacement from attempts one
+through six. There are no phase quotas, set row patterns, or adaptive
+rubber-banding. Winning guesses and attempt six stay truthful. A selected row
+can remain truthful when no candidate passes the contextual quality gate.
+
+Generation 3 replaces exact-decoy-only plausibility with a player-belief model.
+A credible world is an alternate answer plus a difficulty-bounded explanation
+of which displayed tiles could already have lied. Early rows therefore retain
+broad deceptive freedom even after an unusually strong first guess. Later rows
+use a higher quality threshold, allowing unsupported rare-letter probes to stay
+truthful. Repeat threads may revisit a previously lied-about letter at every
+level without making that tactic the default.
+
+The punishment director preserves random event timing while introducing
+compatibility-tested pressure scenes. Doubt III and Deception may combine
+Reverse Entry with Forced Commitment. A ten-second Timer never joins that
+two-input stack. Distinct Reverse Entry events may occupy consecutive guesses;
+an event never carries into another guess after its timed attempt expires. The
+UI stacks concise active-punishment names in one status region. The
+result view audits lies only; it does not recap punishments the player already
+experienced.
+
+| Punishment selection | Doubt I | Doubt II | Doubt III | Deception |
+|---|---:|---:|---:|---:|
+| Timer, at least once | 22% | 55% | 95% | 100% |
+| Reverse Entry | 15% | 30% | 55% | 75% |
+| Blind Entry | 8% | 22% | 40% | 55% |
+| Corrupted History | 12% | 25% | 30% | 30% |
+| No Revision | 0% | 15% | 35% | 50% |
+| Forced Commitment | 0% | 10% | 35% | 55% |
+| Memory Tax | 0% | 0% | 50% | 80% |
+| Blackout | 0% | 30% | 75% | 95% |
+| Intrusion, per eligible row | 0% | 12% | 30% | 50% |
+| Coordinated pressure scene | 0% | 15% | 80% | 95% |
+
+Doubt III schedules zero, one, or two Timers at 5%, 50%, and 45%. Deception
+schedules one, two, or three at 15%, 45%, and 40%. Doubt III selects one or two
+Reverse Entry events at 55% and 45% after the game qualifies for Reverse Entry;
+Deception selects one, two, or three at 35%, 45%, and 20%. Pressure budgets and
+event caps are 2/1, 6/3, 12/7, and 20/11 across the four levels. Compatibility
+validation can suppress a selected event, so enforced simulations also gate
+post-validation encounter rates, same-attempt Reverse-plus-Timer pressure, and
+quiet-blueprint frequency. Blackout remains limited to guesses three through
+five and is weighted toward guesses four and five on the top two levels.
+
+Performance gates are enforced by repository commands: common lie decisions
+must remain at or below 25ms p99, maximum-history and two-tile decisions at or
+below 35ms p99, with a 50ms p99.9 ceiling. Blueprint generation must remain at
+or below 5ms p99 through Doubt III. Maximum-pressure Deception blueprints have
+a 10ms p99 and 20ms p99.9 ceiling. Raw maxima are reported for diagnosis but do
+not fail the gate because OS scheduling pauses are not engine work. The 100,000-seed
+balance simulation checks declared marginals, legal overlap, pressure bands,
+and generation latency.
+
+## Preset generation 2 (stored-game compatibility)
+
+Generation 2 games use the `@2` preset family and blueprint schema 5. Stored
+`@1` games retain their original behavior. Schema-5 blueprints contain normalized
+punishment plans with trigger attempts, effective attempts, lifecycle, pressure
+cost, and private configuration, so compatibility is checked against the guess
+actually affected.
+
+The additional punishments are Blind Entry, Corrupted History, Forced
+Commitment, No Revision, and Memory Tax. Only one input modifier can affect a
+guess, ten-second timers cannot combine with input modifiers, and Memory Tax
+keeps the two newest rows until terminal history restoration.
+
+Reverse Entry targets an encountered event in 10%, 15%, 25%, and 35% of Doubt
+I, Doubt II, Doubt III, and Deception games. Doubt I uses one categorical
+punishment slot. Higher levels use pressure budgets of 4, 8, and 13 with event
+caps of 2, 4, and 7. Intrusion returns from its temporary Deception testing
+override to a 35% per-eligible-row selection rate.
+
 Generated through product workshop on 2026-08-03  
 Branch: `main`  
-Status: APPROVED PRODUCT DIRECTION; NOT IMPLEMENTATION-READY UNTIL TUNING GATE  
+Status: GENERATION 3 IMPLEMENTED; PLAYTEST CALIBRATION PENDING
 Mode: Builder
 
 ## Problem Statement
@@ -51,7 +138,7 @@ The following rules are shared by every preset:
 - A lie changes feedback only; tile movement and letter transformation remain
   punishments.
 - Blackout may occur at most once per stage.
-- Every completed stage reveals its answer, lie report, and punishment breakdown.
+- Every completed stage reveals its answer and lie report.
 - Accessibility equivalents must preserve the challenge without exposing the
   hidden schedule.
 
@@ -100,7 +187,7 @@ silently change active games.
 | Axis | Doubt I | Doubt II | Doubt III | Deception |
 |---|---|---|---|---|
 | Intended experience | Approachable distrust | Complete standard experience | Aggressive combined pressure | Expert survival challenge |
-| Scheduled lie rows | 1 | 1-2 | 2-3 | 3-5 eligible nonterminal rows |
+| Scheduled lie rows | 1-2 | 1-3 | 2-4 | 3-5 eligible nonterminal rows |
 | False tiles per lying row | Maximum 1 | Maximum 1 | Maximum 2 | Maximum 2 |
 | Guess Timer | At most once | At most once | May repeat | May repeat |
 | Reverse Entry | At most once | At most once | May repeat | May repeat |
@@ -189,7 +276,8 @@ instead of silently changing active games.
 
 The values above are immutable for `doubt-2@1`. Milestone 0 does not retune them,
 and the Doubt II migration acceptance test compares against this exact baseline.
-Any later probability or duration change must be proposed as `doubt-2@2`.
+The first later tuning pass was introduced as `doubt-2@2`; generation 3 now
+owns the defaults for newly created games.
 
 ## Recommended Architecture: Hidden Pressure Scheduler
 
@@ -259,7 +347,8 @@ The compatibility matrix is data owned by each difficulty preset. It must answer
 
 Initial direction:
 
-- Doubt I and Doubt II never combine punishments on the same attempt.
+- Doubt I never combines punishments; Doubt II permits only light, validated
+  overlap.
 - Doubt II retains the protective Blackout buffer used by the current game.
 - Doubt III permits a limited, explicit set of combinations.
 - Deception permits the broadest combinations, including repeated Timer and
@@ -305,11 +394,12 @@ Hard fairness constraints include:
 
 ### Two-tile lie feasibility guard
 
-Coordinated two-tile search must remain deterministic and bounded by the existing
-deception decision budget. It filters the curated alternative-answer corpus once,
-uses deterministic tie-breaking, and returns truthful feedback when the budget or
-safe-candidate set is exhausted. It must not enumerate an unbounded mutation space
-or delay row reveal to force a lie.
+Coordinated two-tile search must remain deterministic and bounded by the
+deception decision budget. It scans the curated alternative-answer corpus once,
+aggregates supported mutations, and uses deterministic near-best tie-breaking.
+If the deadline arrives after a plausible candidate is found, the best candidate
+found so far is used. Truth is returned only when no valid candidate exists or a
+hard strategy restriction applies. It must not delay row reveal to force a lie.
 
 ## Daily Descent
 
@@ -390,14 +480,13 @@ transitions directly to `completed`.
 - The token enforces the interruption contract; it is not an account credential or an
   anti-cheat boundary.
 
-## Practice and Future Infinite Compatibility
+## Infinite Compatibility
 
-- Practice exposes all four difficulties immediately and allows unrestricted replay.
-- Infinite will expose all four difficulties immediately when its lives system is
-  implemented.
-- Practice and Infinite use the same preset definitions as Daily Descent.
-- Their answers and challenge blueprints are generated per game rather than from the
-  shared daily seed.
+- Infinite exposes all four difficulties immediately and allows unrestricted
+  replay in the current playtest.
+- Infinite uses the same preset definitions as Daily Descent.
+- Its answers and challenge blueprints are generated per game rather than from
+  the shared daily seed.
 
 ## Progress and Future Leaderboards
 
@@ -480,15 +569,16 @@ only the following former global assumptions:
 
 Invalid guesses never consume a stage or satisfy Reverse Entry. Timer expiry consumes
 the currently timed attempt according to the existing server-authoritative rule; a
-timer cannot expire before a prior accepted row activates it.
+timer cannot expire before a prior accepted row activates it. A Reverse Entry event
+that affected the expired attempt is consumed with that row. The following guess is
+reversed only when a distinct event was separately scheduled for it.
 
 ## Accessibility Gate
 
 - Every preset supports keyboard, touch, mouse, and controller-equivalent input paths.
 - Reduced-motion presentation changes animation, not schedule or outcome.
-- Timer and Reverse Entry may not be combined in a released preset until their
-  accessible input and announcement behavior passes keyboard, touch, screen-reader,
-  and reduced-motion testing.
+- Every combined time and input state must pass keyboard, touch, screen-reader,
+  focus-order, and reduced-motion testing before public release.
 - Any time-pressure opt-out or equivalent replacement must be defined before ranked
   comparisons are introduced. Until then, leaderboard eligibility behavior remains
   unresolved and is not an implementation assumption.
@@ -587,10 +677,11 @@ stage outcome storage is required earlier.
 
 ## Implementation Status
 
-Milestones 0 through 3 are complete. The approved version 1 matrix is the
-implementation specification for the preset registry, all four difficulties are
-executable in Infinite, and Daily Descent persists its four-stage run through
-checkpoints, failure, forfeiture, completion, and the 03:00 UTC reset.
+Milestones 0 through 3 and preset generation 3 are complete. All four
+difficulties are executable in Infinite, and Daily Descent persists its
+four-stage run through checkpoints, failure, forfeiture, completion, and the
+03:00 UTC reset. Balance is now a playtest calibration question rather than an
+architecture gap.
 
 ## Next Workshop Assignment
 

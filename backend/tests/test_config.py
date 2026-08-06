@@ -33,3 +33,9 @@ def test_database_url_removes_vercel_supabase_metadata(monkeypatch) -> None:
         "postgresql://user:password@host:6543/postgres"
         "?sslmode=require&application_name=deception"
     )
+
+
+def test_decision_budget_defaults_to_forty_milliseconds(monkeypatch) -> None:
+    monkeypatch.delenv("DECEPTION_DECISION_BUDGET_MS", raising=False)
+
+    assert Settings.from_env().deception_decision_budget_ms == 40
